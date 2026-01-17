@@ -80,3 +80,25 @@ def test_cpp_model_decorator_env_checks_field_names() -> None:
     os.environ.pop("PYMERGETIC_CPPMODEL_VALIDATE", None)
 
 
+def test_cppmodel_nested_models_from_attributes() -> None:
+    class NativeAddress:
+        ip = "127.0.0.1"
+
+    class NativePeer:
+        peer_id = "QmHash"
+        main_address = NativeAddress()
+
+    class AddressModel(CppModel):
+        ip: str
+
+    class PeerModel(CppModel):
+        peer_id: str
+        main_address: AddressModel
+
+    native = NativePeer()
+    model = PeerModel.model_validate(native)
+
+    assert model.peer_id == "QmHash"
+    assert model.main_address.ip == "127.0.0.1"
+
+
