@@ -31,39 +31,54 @@ class _BoundList(list):
     def _sync(self) -> None:
         self._owner._on_bound_list_mutation(self._field_name)
 
+    def _try_native_op(self, op: str, *args: Any) -> bool:  # noqa: ANN401
+        """Try a granular native container operation; return True if performed."""
+
+        return self._owner._on_bound_list_op(self._field_name, op, *args)
+
     # Structural mutation hooks
     def append(self, item: Any) -> None:  # noqa: ANN401
         super().append(item)
-        self._sync()
+        if not self._try_native_op("append", item):
+            self._sync()
 
     def extend(self, iterable: Iterable[Any]) -> None:  # noqa: ANN401
-        super().extend(iterable)
-        self._sync()
+        items = list(iterable)
+        super().extend(items)
+        if not self._try_native_op("extend", items):
+            self._sync()
 
     def insert(self, index: int, item: Any) -> None:  # noqa: ANN401
         super().insert(index, item)
-        self._sync()
+        # Native views rarely support insert efficiently; fall back.
+        if not self._try_native_op("insert", index, item):
+            self._sync()
 
     def pop(self, index: int = -1) -> Any:  # noqa: ANN401
         v = super().pop(index)
-        self._sync()
+        if not self._try_native_op("pop", index):
+            self._sync()
         return v
 
     def remove(self, item: Any) -> None:  # noqa: ANN401
         super().remove(item)
-        self._sync()
+        if not self._try_native_op("remove", item):
+            self._sync()
 
     def clear(self) -> None:
         super().clear()
-        self._sync()
+        if not self._try_native_op("clear"):
+            self._sync()
 
     def __delitem__(self, key: int | slice) -> None:
         super().__delitem__(key)
-        self._sync()
+        if not self._try_native_op("delitem", key):
+            self._sync()
 
     def __setitem__(self, key: int | slice, value: Any) -> None:  # noqa: ANN401
         super().__setitem__(key, value)
-        self._sync()
+        if not self._try_native_op("setitem", key, value):
+            self._sync()
 
     def sort(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
         super().sort(*args, **kwargs)
@@ -195,6 +210,15 @@ class CppModel(BaseModel):
     - Nested objects MUST be exposed by nanobind using reference semantics
       (e.g., `def_rw` or `def_prop_rw(..., rv_policy::reference_internal)`),
       otherwise binding can attach to temporary copies.
+
+    Important container requirement (for bidirectional containers):
+    - If a C++ container is exposed via automatic STL conversion (e.g. a
+      `std::vector<T>` property that appears as a Python `list`), Python will
+      typically receive a **copy**. Structural mutations on that list will not
+      update C++.
+    - For true bidirectional container sync and O(1) structural ops, expose a
+      dedicated nanobind "view/proxy" type with methods like `append`, `erase`,
+      `clear`, and `__getitem__` returning `reference_internal`.
     """
 
     _cpp_obj: object | None = PrivateAttr(default=None)
@@ -377,6 +401,73 @@ class CppModel(BaseModel):
         native_value = self._to_native_value(current, native_container)
         setattr(obj, field_name, native_value)
         self._bind_nested(current, getattr(obj, field_name))
+
+    def _on_bound_list_op(self, field_name: str, op: str, *args: Any) -> bool:  # noqa: ANN401
+        """Attempt an O(1)/granular native list operation.
+
+        Returns True if the operation was applied to the native container.
+        """
+
+        if self._cpp_sync_suspended:
+            return False
+        obj = self._cpp_obj
+        if obj is None or not hasattr(obj, field_name):
+            return False
+
+        native_container = getattr(obj, field_name)
+        try:
+            if op == "append" and hasattr(native_container, "append"):
+                (item,) = args
+                native_container.append(self._to_native_value(item, None))
+                return True
+
+            if op == "extend" and hasattr(native_container, "append"):
+                (items,) = args
+                for item in items:
+                    native_container.append(self._to_native_value(item, None))
+                return True
+
+            if op == "clear" and hasattr(native_container, "clear"):
+                native_container.clear()
+                return True
+
+            if op == "pop" and hasattr(native_container, "erase") and hasattr(native_container, "__len__"):
+                (index,) = args
+                n = len(native_container)
+                # Mirror Python negative indexing.
+                i = index if index >= 0 else n + index
+                if i < 0 or i >= n:
+                    return False
+                native_container.erase(i)
+                return True
+
+            if op == "delitem" and hasattr(native_container, "erase") and hasattr(native_container, "__len__"):
+                (key,) = args
+                if isinstance(key, slice):
+                    return False
+                n = len(native_container)
+                i = key if key >= 0 else n + key
+                if i < 0 or i >= n:
+                    return False
+                native_container.erase(i)
+                return True
+
+            if op == "setitem" and hasattr(native_container, "__setitem__") and hasattr(native_container, "__len__"):
+                key, value = args
+                if isinstance(key, slice):
+                    return False
+                n = len(native_container)
+                i = key if key >= 0 else n + key
+                if i < 0 or i >= n:
+                    return False
+                native_container[i] = self._to_native_value(value, None)
+                return True
+
+            # Not supported efficiently.
+            return False
+        except Exception:
+            # Any native failure should fall back to a full re-sync path.
+            return False
 
     def _bind_nested(self, value: Any, native_value: Any) -> None:  # noqa: ANN401
         if isinstance(value, CppModel):
