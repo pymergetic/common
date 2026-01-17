@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace pymergetic::common::codec {
 
@@ -19,6 +20,21 @@ namespace pymergetic::common::codec {
 // This makes payloads self-describing and forward-compatible.
 inline constexpr char k_magic[4] = {'P', 'M', 'D', 'G'};
 inline constexpr std::uint8_t k_header_version = 1;
+
+// Stable type-id hash (FNV-1a 32-bit) for avoiding collisions across modules.
+// Use fully-qualified names like "pymergetic.axon.PeerInfo".
+inline constexpr std::uint32_t fnv1a32(std::string_view s) {
+  std::uint32_t h = 2166136261u;
+  for (char c : s) {
+    h ^= static_cast<std::uint8_t>(c);
+    h *= 16777619u;
+  }
+  return h;
+}
+
+inline constexpr std::uint32_t type_id(std::string_view fully_qualified_name) {
+  return fnv1a32(fully_qualified_name);
+}
 
 inline void append_u8(std::string& out, std::uint8_t v) { out.push_back(static_cast<char>(v)); }
 

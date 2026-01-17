@@ -6,8 +6,17 @@
 
 #include <pymergetic/nb/base.hpp>
 #include <pymergetic/nb/data.hpp>
+#include <pymergetic/nb/asyncio_bridge.hpp>
 
 #include <pymergetic/common/codec.hpp>
+
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/post.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/system/error_code.hpp>
+
+#include <chrono>
+#include <thread>
 
 namespace nb = nanobind;
 
@@ -106,6 +115,40 @@ NB_MODULE(_test_internal, m) {
 
   m.def("add", [](int a, int b) { return a + b; });
 
+  // Boost.Asio smoke: ensure headers compile and async timer runs.
+  m.def("boost_asio_timer_fires", []() {
+    boost::asio::io_context io(1);
+    boost::asio::steady_timer t(io);
+    bool fired = false;
+    t.expires_after(std::chrono::milliseconds(1));
+    t.async_wait([&](const boost::system::error_code& ec) { fired = !ec; });
+    io.run();
+    return fired;
+  });
+
+  // Standardized Asio -> asyncio.Future bridge example.
+  // Returns an awaitable Future that resolves to a+b from an Asio thread.
+  m.def("boost_asio_async_add", [](int a, int b) -> nb::object {
+    nb::object loop = pymergetic::nb::asyncio_bridge::get_running_loop();
+    nb::object fut = pymergetic::nb::asyncio_bridge::create_future(loop);
+
+    // Run a tiny Asio task on a dedicated thread and resolve the Future.
+    std::thread([loop = nb::object(loop), fut = nb::object(fut), a, b]() mutable {
+      boost::asio::io_context io(1);
+      boost::asio::post(io, [loop = std::move(loop), fut = std::move(fut), a, b]() mutable {
+        try {
+          pymergetic::nb::asyncio_bridge::future_set_result(loop, fut, nb::int_(a + b));
+        } catch (const std::exception& e) {
+          nb::object exc = nb::module_::import_("builtins").attr("RuntimeError")(e.what());
+          pymergetic::nb::asyncio_bridge::future_set_exception(loop, fut, std::move(exc));
+        }
+      });
+      io.run();
+    }).detach();
+
+    return fut;
+  });
+
   // ---- CppObject / PyObject pattern smoke ----
   nb::class_<pymergetic::nb::CppObject>(m, "CppObject")
       .def("to_dict", &pymergetic::nb::CppObject::to_dict)
@@ -156,7 +199,7 @@ NB_MODULE(_test_internal, m) {
     }
 
     std::string serialize_bytes() const override {
-      constexpr std::uint32_t k_type_id = 0x00000001u;
+      constexpr std::uint32_t k_type_id = pymergetic::common::codec::type_id("pymergetic.common.DataPoint");
       // Payload format (versioned by outer header):
       //   [i32 little][u32 len][bytes]
       std::string payload;
@@ -170,7 +213,7 @@ NB_MODULE(_test_internal, m) {
     }
 
     static std::shared_ptr<DataPoint> deserialize(nb::bytes data) {
-      constexpr std::uint32_t k_type_id = 0x00000001u;
+      constexpr std::uint32_t k_type_id = pymergetic::common::codec::type_id("pymergetic.common.DataPoint");
       const char* p = data.c_str();
       const std::size_t n = data.size();
       const auto h = pymergetic::common::codec::read_header(p, n);

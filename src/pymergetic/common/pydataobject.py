@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from typing import Any, Callable, ClassVar, Generic, TypeVar
 
 
@@ -57,8 +58,12 @@ class PyDataObject(Generic[T]):
     ) -> Any:
         """Pydantic v2 integration (round-trip safe).
 
-        JSON representation is bytes (base64 in JSON), so the object is
-        idempotently recoverable.
+        JSON representation is a base64 string of the serialized bytes, so the
+        object is idempotently recoverable regardless of global Pydantic settings.
+
+        NOTE: For large payloads, base64-in-JSON is inefficient. Prefer storing
+        or transmitting the raw bytes out-of-band (files, blobs, streaming APIs)
+        and keep JSON for metadata/small payloads.
         """
 
         from pydantic_core import core_schema
@@ -76,11 +81,15 @@ class PyDataObject(Generic[T]):
         def _from_bytes(v: bytes) -> "PyDataObject[T]":
             return cls.from_bytes(v)
 
+        def _from_b64(s: str) -> "PyDataObject[T]":
+            try:
+                raw = base64.b64decode(s.encode("ascii"), validate=True)
+            except Exception as e:
+                raise ValueError("Invalid base64 payload for PyDataObject") from e
+            return cls.from_bytes(raw)
+
         return core_schema.json_or_python_schema(
-            json_schema=core_schema.no_info_after_validator_function(
-                _from_bytes,
-                core_schema.bytes_schema(),
-            ),
+            json_schema=core_schema.no_info_after_validator_function(_from_b64, core_schema.str_schema()),
             python_schema=core_schema.no_info_plain_validator_function(_from_native),
             serialization=core_schema.plain_serializer_function_ser_schema(
                 cls._pydantic_serialize,
@@ -90,8 +99,8 @@ class PyDataObject(Generic[T]):
         )
 
     @staticmethod
-    def _pydantic_serialize(obj: "PyDataObject[Any]") -> bytes:
-        return obj.to_bytes()
+    def _pydantic_serialize(obj: "PyDataObject[Any]") -> str:
+        return base64.b64encode(obj.to_bytes()).decode("ascii")
 
 
 __all__ = ["PyDataObject"]

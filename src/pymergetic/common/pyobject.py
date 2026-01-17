@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable, Generic, TypeVar
 
 
@@ -26,7 +27,14 @@ class PyObject(Generic[T]):
 
     def to_dict(self) -> dict:
         # Expect the C++ object to provide a `to_dict()` method (nanobind bound).
+        # IMPORTANT: this should be a non-blocking snapshot (no I/O).
         return dict(self._handle.to_dict())  # type: ignore[attr-defined]
+
+    async def to_dict_async(self) -> dict:
+        # Escape hatch for frameworks that need an async call path.
+        # NOTE: Do not use this to "paper over" blocking native I/O; native I/O
+        # should be implemented asynchronously in C++ (Boost.Asio) and exposed as awaitables.
+        return await asyncio.to_thread(self.to_dict)
 
     def __repr__(self) -> str:
         return repr(self._handle)

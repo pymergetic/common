@@ -39,6 +39,21 @@ target_include_directories(pymergetic_common_interface INTERFACE
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
+# --- 1b) Foundational C++ deps: Boost headers (Boost.Asio) ---
+find_path(PYMERGETIC_BOOST_INCLUDE_DIR boost/asio.hpp)
+if(NOT PYMERGETIC_BOOST_INCLUDE_DIR)
+    set(_pymergetic_boost_ver "1.85.0")
+    string(REPLACE "." "_" _pymergetic_boost_ver_us "${_pymergetic_boost_ver}")
+    set(_pymergetic_boost_url "https://archives.boost.io/release/${_pymergetic_boost_ver}/source/boost_${_pymergetic_boost_ver_us}.tar.gz")
+    FetchContent_Declare(pymergetic_boost URL ${_pymergetic_boost_url})
+    FetchContent_MakeAvailable(pymergetic_boost)
+    set(PYMERGETIC_BOOST_INCLUDE_DIR "${pymergetic_boost_SOURCE_DIR}")
+endif()
+
+target_include_directories(pymergetic_common_interface INTERFACE
+    $<BUILD_INTERFACE:${PYMERGETIC_BOOST_INCLUDE_DIR}>
+)
+
 # --- 2) Tooling: enforce nanobind usage via common ---
 # NOTE: Do not hard-link an interface target against a specific nanobind CMake
 # target name. When nanobind is brought in via FetchContent, the exported target
@@ -50,6 +65,10 @@ function(pymergetic_add_extension target_name)
     nanobind_add_module(${target_name} NB_SHARED ${ARGN})
     target_link_libraries(${target_name} PRIVATE pymergetic::common_interface)
     target_link_libraries(${target_name} PRIVATE Python::Module)
+    # Boost is considered foundational for native async I/O (Boost.Asio). We keep
+    # it header-only here and let consumers fetch/provide headers via the
+    # pymergetic_commonConfig.cmake.
+    target_compile_definitions(${target_name} PRIVATE BOOST_ERROR_CODE_HEADER_ONLY=1 BOOST_SYSTEM_NO_DEPRECATED=1)
     # Ensure the nanobind shared library can be found at runtime from within wheels.
     if(APPLE)
         set_target_properties(${target_name} PROPERTIES

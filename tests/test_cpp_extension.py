@@ -7,6 +7,11 @@ def test_common_cpp_extension_smoke() -> None:
     assert ext.add(2, 3) == 5
 
 
+def test_common_cpp_extension_boost_asio_smoke() -> None:
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+    assert ext.boost_asio_timer_fires() is True
+
+
 def test_common_cpp_extension_optional_support() -> None:
     ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
     o = ext.NativeOptional()
