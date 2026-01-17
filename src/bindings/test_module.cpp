@@ -7,6 +7,8 @@
 #include <pymergetic/nb/base.hpp>
 #include <pymergetic/nb/data.hpp>
 
+#include <pymergetic/common/codec.hpp>
+
 namespace nb = nanobind;
 
 namespace pymergetic::common {
@@ -153,47 +155,32 @@ NB_MODULE(_test_internal, m) {
       return d;
     }
 
-    nb::bytes serialize() const override {
+    std::string serialize_bytes() const override {
       // Format: [u8 version=1][i32 little][u32 len][bytes]
       std::string out;
-      out.push_back(static_cast<char>(1));
-      auto put_u32 = [&](std::uint32_t v) {
-        out.push_back(static_cast<char>(v & 0xFF));
-        out.push_back(static_cast<char>((v >> 8) & 0xFF));
-        out.push_back(static_cast<char>((v >> 16) & 0xFF));
-        out.push_back(static_cast<char>((v >> 24) & 0xFF));
-      };
-      auto put_i32 = [&](std::int32_t v) { put_u32(static_cast<std::uint32_t>(v)); };
-      put_i32(a);
-      put_u32(static_cast<std::uint32_t>(b.size()));
-      out.append(b);
-      return nb::bytes(out.data(), out.size());
+      pymergetic::common::codec::append_u8(out, 1);
+      pymergetic::common::codec::append_i32_le(out, a);
+      pymergetic::common::codec::append_u32_len_prefixed(out, b);
+      return out;
     }
 
     static std::shared_ptr<DataPoint> deserialize(nb::bytes data) {
       const char* p = data.c_str();
       const std::size_t n = data.size();
-      if (n < 1 + 4 + 4) {
+      if (n < 1) {
         throw std::runtime_error("DataPoint: buffer too small");
       }
       const std::uint8_t ver = static_cast<std::uint8_t>(p[0]);
       if (ver != 1) {
         throw std::runtime_error("DataPoint: unsupported version");
       }
-      auto get_u32 = [&](std::size_t off) -> std::uint32_t {
-        return (static_cast<std::uint32_t>(static_cast<unsigned char>(p[off])) |
-                (static_cast<std::uint32_t>(static_cast<unsigned char>(p[off + 1])) << 8) |
-                (static_cast<std::uint32_t>(static_cast<unsigned char>(p[off + 2])) << 16) |
-                (static_cast<std::uint32_t>(static_cast<unsigned char>(p[off + 3])) << 24));
-      };
-      const std::int32_t a = static_cast<std::int32_t>(get_u32(1));
-      const std::uint32_t len = get_u32(1 + 4);
-      if (n < 1 + 4 + 4 + len) {
-        throw std::runtime_error("DataPoint: invalid length");
-      }
+      const std::int32_t a = pymergetic::common::codec::read_i32_le(p, n, 1);
+      std::size_t off = 1 + 4;
+      std::size_t next = 0;
+      std::string b = pymergetic::common::codec::read_u32_len_prefixed_bytes(p, n, off, &next);
       auto obj = std::make_shared<DataPoint>();
       obj->a = a;
-      obj->b.assign(p + (1 + 4 + 4), p + (1 + 4 + 4 + len));
+      obj->b = std::move(b);
       return obj;
     }
   };
@@ -202,7 +189,7 @@ NB_MODULE(_test_internal, m) {
       .def(nb::init<>())
       .def_rw("a", &DataPoint::a)
       .def_rw("b", &DataPoint::b)
-      .def("serialize", &DataPoint::serialize)
+      .def("serialize", &pymergetic::nb::CppDataObject::serialize)
       .def_static("deserialize", &DataPoint::deserialize)
       .def("to_dict", &DataPoint::to_dict)
       .def("__repr__", &DataPoint::repr);
