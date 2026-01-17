@@ -1,0 +1,39 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# nanobind is required for pymergetic_add_extension(). Prefer a system install,
+# but fall back to fetching a pinned version for reproducible builds.
+find_dependency(Python COMPONENTS Interpreter Development.Module)
+find_dependency(nanobind CONFIG QUIET)
+if(NOT nanobind_FOUND)
+  include(FetchContent)
+  FetchContent_Declare(
+    nanobind
+    GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+    GIT_TAG v2.9.2
+  )
+  FetchContent_MakeAvailable(nanobind)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/pymergetic_commonTargets.cmake")
+
+# Also export the helper macro for consumers using find_package(pymergetic_common).
+function(pymergetic_add_extension target_name)
+    nanobind_add_module(${target_name} NB_SHARED ${ARGN})
+    target_link_libraries(${target_name} PRIVATE pymergetic::common_interface)
+    target_link_libraries(${target_name} PRIVATE Python::Module)
+    if(APPLE)
+        set_target_properties(${target_name} PROPERTIES
+            BUILD_RPATH "@loader_path"
+            INSTALL_RPATH "@loader_path"
+        )
+    else()
+        set_target_properties(${target_name} PROPERTIES
+            BUILD_RPATH "$ORIGIN"
+            INSTALL_RPATH "$ORIGIN"
+        )
+    endif()
+endfunction()
+
+
