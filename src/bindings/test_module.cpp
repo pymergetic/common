@@ -1,7 +1,10 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+
+#include <pymergetic/nb/base.hpp>
 
 namespace nb = nanobind;
 
@@ -76,6 +79,16 @@ struct NativePeerNested {
   }
 };
 
+struct PacketPayload {
+  std::vector<std::uint8_t> data;
+};
+
+struct NetworkPacket {
+  std::string id;
+  double timestamp{};
+  std::shared_ptr<PacketPayload> payload;
+};
+
 inline std::size_t NativeAddressVecView::size() const { return owner->addresses_storage.size(); }
 inline NativeAddress& NativeAddressVecView::at(std::size_t i) { return owner->addresses_storage.at(i); }
 inline void NativeAddressVecView::set(std::size_t i, NativeAddress v) { owner->addresses_storage.at(i) = std::move(v); }
@@ -89,6 +102,29 @@ NB_MODULE(_test_internal, m) {
   m.doc() = "pymergetic-common test extension (nanobind)";
 
   m.def("add", [](int a, int b) { return a + b; });
+
+  // ---- CppObject / PyObject pattern smoke ----
+  nb::class_<pymergetic::nb::CppObject>(m, "CppObject")
+      .def("to_dict", &pymergetic::nb::CppObject::to_dict)
+      .def("__repr__", &pymergetic::nb::CppObject::repr);
+
+  struct NetworkService : public pymergetic::nb::CppObject {
+    std::string status = "disconnected";
+    void connect(std::string url) { status = "connected:" + url; }
+    std::string repr() const override { return "<NetworkService>"; }
+    nb::dict to_dict() const override {
+      nb::dict d;
+      d["status"] = status;
+      return d;
+    }
+  };
+
+  nb::class_<NetworkService, pymergetic::nb::CppObject>(m, "NetworkService")
+      .def("connect", &NetworkService::connect)
+      .def("to_dict", &NetworkService::to_dict)
+      .def("__repr__", &NetworkService::repr);
+
+  m.def("make_network_service", []() { return std::make_shared<NetworkService>(); });
 
   nb::class_<pymergetic::common::NativePeerInfo>(m, "NativePeerInfo")
       .def(nb::init<>())
@@ -132,6 +168,26 @@ NB_MODULE(_test_internal, m) {
     p.main_address.ip = "127.0.0.1";
     p.addresses.append(pymergetic::common::NativeAddress{.ip = "10.0.0.1"});
     p.addresses.append(pymergetic::common::NativeAddress{.ip = "10.0.0.2"});
+    return p;
+  });
+
+  nb::class_<pymergetic::common::PacketPayload>(m, "PacketPayload")
+      .def(nb::init<>())
+      .def("size", [](const pymergetic::common::PacketPayload& p) { return p.data.size(); });
+
+  nb::class_<pymergetic::common::NetworkPacket>(m, "NetworkPacket")
+      .def(nb::init<>())
+      .def_rw("id", &pymergetic::common::NetworkPacket::id)
+      .def_rw("timestamp", &pymergetic::common::NetworkPacket::timestamp)
+      .def_rw("payload", &pymergetic::common::NetworkPacket::payload);
+
+  m.def("make_network_packet", []() {
+    pymergetic::common::NetworkPacket p;
+    p.id = "pkt-1";
+    p.timestamp = 1.0;
+    auto payload = std::make_shared<pymergetic::common::PacketPayload>();
+    payload->data.resize(1024);
+    p.payload = std::move(payload);
     return p;
   });
 }
