@@ -19,6 +19,59 @@ def test_pydataobject_bytes_roundtrip() -> None:
     assert dp2.to_dict() == {"a": 7, "b": "hello"}
 
 
+def test_pydataobject_rejects_bad_magic() -> None:
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+
+    class DataPoint(PyDataObject[object]):
+        _native_type = ext.DataPoint
+
+    dp = DataPoint(ext.make_datapoint(1, "x"))
+    blob = bytearray(dp.to_bytes())
+    blob[0:4] = b"NOPE"
+    with pytest.raises(RuntimeError, match="magic"):
+        DataPoint.from_bytes(bytes(blob))
+
+
+def test_pydataobject_rejects_wrong_type_id() -> None:
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+
+    class DataPoint(PyDataObject[object]):
+        _native_type = ext.DataPoint
+
+    dp = DataPoint(ext.make_datapoint(1, "x"))
+    blob = bytearray(dp.to_bytes())
+    # type_id is little-endian u32 at offset 5
+    blob[5] ^= 0xFF
+    with pytest.raises(RuntimeError, match="type_id"):
+        DataPoint.from_bytes(bytes(blob))
+
+
+def test_pydataobject_rejects_truncated_payload() -> None:
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+
+    class DataPoint(PyDataObject[object]):
+        _native_type = ext.DataPoint
+
+    dp = DataPoint(ext.make_datapoint(1, "x"))
+    blob = dp.to_bytes()
+    with pytest.raises(RuntimeError):
+        DataPoint.from_bytes(blob[:-1])
+
+
+def test_pydataobject_rejects_length_mismatch() -> None:
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+
+    class DataPoint(PyDataObject[object]):
+        _native_type = ext.DataPoint
+
+    dp = DataPoint(ext.make_datapoint(1, "x"))
+    blob = bytearray(dp.to_bytes())
+    # payload_len is little-endian u32 at offset 9; bump it by 1
+    blob[9] = (blob[9] + 1) % 256
+    with pytest.raises(RuntimeError, match="length"):
+        DataPoint.from_bytes(bytes(blob))
+
+
 def test_pydataobject_pydantic_json_roundtrip() -> None:
     pydantic = pytest.importorskip("pydantic")
     ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)

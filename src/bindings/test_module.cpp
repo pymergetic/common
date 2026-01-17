@@ -136,12 +136,39 @@ NB_MODULE(_test_internal, m) {
     std::thread([loop = nb::object(loop), fut = nb::object(fut), a, b]() mutable {
       boost::asio::io_context io(1);
       boost::asio::post(io, [loop = std::move(loop), fut = std::move(fut), a, b]() mutable {
+        // IMPORTANT: ensure any decref of `nb::object` happens while holding the GIL.
+        // The lambda object (and its captures) will be destroyed by Asio on this thread
+        // after the handler runs. We therefore "drain" the captures under the GIL.
+        nb::gil_scoped_acquire _gil;
         try {
           pymergetic::nb::asyncio_bridge::future_set_result(loop, fut, nb::int_(a + b));
         } catch (const std::exception& e) {
           nb::object exc = nb::module_::import_("builtins").attr("RuntimeError")(e.what());
           pymergetic::nb::asyncio_bridge::future_set_exception(loop, fut, std::move(exc));
         }
+        // Drain captures under GIL so the eventual lambda destruction is safe.
+        loop = nb::object();
+        fut = nb::object();
+      });
+      io.run();
+    }).detach();
+
+    return fut;
+  });
+
+  // Async exception path: returns an awaitable Future that raises RuntimeError.
+  m.def("boost_asio_async_fail", [](const std::string& msg) -> nb::object {
+    nb::object loop = pymergetic::nb::asyncio_bridge::get_running_loop();
+    nb::object fut = pymergetic::nb::asyncio_bridge::create_future(loop);
+
+    std::thread([loop = nb::object(loop), fut = nb::object(fut), msg]() mutable {
+      boost::asio::io_context io(1);
+      boost::asio::post(io, [loop = std::move(loop), fut = std::move(fut), msg]() mutable {
+        nb::gil_scoped_acquire _gil;
+        nb::object exc = nb::module_::import_("builtins").attr("RuntimeError")(msg.c_str());
+        pymergetic::nb::asyncio_bridge::future_set_exception(loop, fut, std::move(exc));
+        loop = nb::object();
+        fut = nb::object();
       });
       io.run();
     }).detach();
