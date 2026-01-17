@@ -35,3 +35,19 @@ def test_cpp_shared_ptr_lifetime_survives_python_gc() -> None:
     ext.cpp_clear_held_network_service()
 
 
+def test_pyobject_pydantic_json_dump_uses_to_dict() -> None:
+    pydantic = pytest.importorskip("pydantic")
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+
+    class M(pydantic.BaseModel):
+        service: PyObject[object]
+
+    svc = ext.make_network_service()
+    svc.connect("http://example")
+    m = M(service=PyObject(svc))
+
+    dumped = m.model_dump()  # python mode keeps opaque handle
+    assert isinstance(dumped["service"], PyObject)
+    assert '"status":"connected:http://example"' in m.model_dump_json()
+
+

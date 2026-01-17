@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 
 T = TypeVar("T")
@@ -30,6 +30,38 @@ class PyObject(Generic[T]):
 
     def __repr__(self) -> str:
         return repr(self._handle)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        _source_type: Any,
+        _handler: Callable[[Any], Any],
+    ) -> Any:
+        """Pydantic v2 integration (passive bridge).
+
+        - Python validation: accept only real PyObject instances
+        - JSON input: rejected (native handles can't be constructed from JSON)
+        - JSON serialization: uses `to_dict()` (native fast path)
+        """
+
+        from pydantic_core import core_schema
+
+        def _reject_json(_v: Any) -> Any:  # noqa: ANN401
+            raise ValueError("PyObject cannot be parsed from JSON; it must be provided as a Python object")
+
+        return core_schema.json_or_python_schema(
+            json_schema=core_schema.no_info_plain_validator_function(_reject_json),
+            python_schema=core_schema.is_instance_schema(cls),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                cls._pydantic_serialize,
+                info_arg=False,
+                when_used="json",
+            ),
+        )
+
+    @staticmethod
+    def _pydantic_serialize(obj: "PyObject[Any]") -> Any:  # noqa: ANN401
+        return obj.to_dict()
 
 
 __all__ = ["PyObject"]
