@@ -126,6 +126,12 @@ NB_MODULE(_test_internal, m) {
 
   m.def("make_network_service", []() { return std::make_shared<NetworkService>(); });
 
+  // shared_ptr lifetime proof: C++ can hold a reference independent of Python.
+  static std::shared_ptr<NetworkService> _held_service;
+  m.def("cpp_hold_network_service", [](std::shared_ptr<NetworkService> s) { _held_service = std::move(s); });
+  m.def("cpp_get_held_network_service", []() { return _held_service; });
+  m.def("cpp_clear_held_network_service", []() { _held_service.reset(); });
+
   nb::class_<pymergetic::common::NativePeerInfo>(m, "NativePeerInfo")
       .def(nb::init<>())
       .def_rw("peer_id", &pymergetic::common::NativePeerInfo::peer_id)
