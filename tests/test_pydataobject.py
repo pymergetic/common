@@ -13,6 +13,7 @@ def test_pydataobject_bytes_roundtrip() -> None:
 
     dp = DataPoint(ext.make_datapoint(7, "hello"))
     blob = dp.to_bytes()
+    assert blob[:4] == b"PMDG"
     dp2 = DataPoint.from_bytes(blob)
 
     assert dp2.to_dict() == {"a": 7, "b": "hello"}

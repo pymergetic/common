@@ -156,28 +156,31 @@ NB_MODULE(_test_internal, m) {
     }
 
     std::string serialize_bytes() const override {
-      // Format: [u8 version=1][i32 little][u32 len][bytes]
+      constexpr std::uint32_t k_type_id = 0x00000001u;
+      // Payload format (versioned by outer header):
+      //   [i32 little][u32 len][bytes]
+      std::string payload;
+      pymergetic::common::codec::append_i32_le(payload, a);
+      pymergetic::common::codec::append_u32_len_prefixed(payload, b);
+
       std::string out;
-      pymergetic::common::codec::append_u8(out, 1);
-      pymergetic::common::codec::append_i32_le(out, a);
-      pymergetic::common::codec::append_u32_len_prefixed(out, b);
+      pymergetic::common::codec::append_header(out, k_type_id, static_cast<std::uint32_t>(payload.size()));
+      out.append(payload);
       return out;
     }
 
     static std::shared_ptr<DataPoint> deserialize(nb::bytes data) {
+      constexpr std::uint32_t k_type_id = 0x00000001u;
       const char* p = data.c_str();
       const std::size_t n = data.size();
-      if (n < 1) {
-        throw std::runtime_error("DataPoint: buffer too small");
+      const auto h = pymergetic::common::codec::read_header(p, n);
+      if (h.type_id != k_type_id) {
+        throw std::runtime_error("DataPoint: wrong type_id");
       }
-      const std::uint8_t ver = static_cast<std::uint8_t>(p[0]);
-      if (ver != 1) {
-        throw std::runtime_error("DataPoint: unsupported version");
-      }
-      const std::int32_t a = pymergetic::common::codec::read_i32_le(p, n, 1);
-      std::size_t off = 1 + 4;
+      const std::size_t off0 = h.payload_off;
+      const std::int32_t a = pymergetic::common::codec::read_i32_le(p, n, off0);
       std::size_t next = 0;
-      std::string b = pymergetic::common::codec::read_u32_len_prefixed_bytes(p, n, off, &next);
+      std::string b = pymergetic::common::codec::read_u32_len_prefixed_bytes(p, n, off0 + 4, &next);
       auto obj = std::make_shared<DataPoint>();
       obj->a = a;
       obj->b = std::move(b);
