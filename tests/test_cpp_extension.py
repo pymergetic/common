@@ -52,3 +52,57 @@ def test_common_cpp_extension_nested_cppmodel_validation() -> None:
     assert [a.ip for a in model.addresses] == ["10.0.0.1", "10.0.0.2"]
 
 
+def test_common_cpp_extension_nested_write_through() -> None:
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+
+    @cpp_model("pymergetic.common._test_internal.NativeAddress", validate="lazy")
+    class AddressModel(CppModel):
+        ip: str
+
+    @cpp_model("pymergetic.common._test_internal.NativePeerNested", validate="lazy")
+    class PeerModel(CppModel):
+        peer_id: str
+        main_address: AddressModel
+        addresses: list[AddressModel]
+
+    native = ext.make_native_peer_nested()
+    model = PeerModel.from_cpp(native)
+
+    # Mutations on the model should write through to the native object.
+    model.peer_id = "NewPeer"
+    model.main_address.ip = "1.1.1.1"
+    model.addresses[0].ip = "10.9.9.9"
+
+    assert native.peer_id == "NewPeer"
+    assert native.main_address.ip == "1.1.1.1"
+    assert [a.ip for a in native.addresses] == ["10.9.9.9", "10.0.0.2"]
+
+
+def test_common_cpp_extension_to_cpp_roundtrip() -> None:
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+
+    @cpp_model("pymergetic.common._test_internal.NativeAddress", validate="lazy")
+    class AddressModel(CppModel):
+        ip: str
+
+    @cpp_model("pymergetic.common._test_internal.NativePeerNested", validate="lazy")
+    class PeerModel(CppModel):
+        peer_id: str
+        main_address: AddressModel
+        addresses: list[AddressModel]
+
+    m = PeerModel(
+        peer_id="P",
+        main_address=AddressModel(ip="127.0.0.1"),
+        addresses=[AddressModel(ip="10.0.0.1")],
+    )
+    native = m.to_cpp()
+
+    assert native.peer_id == "P"
+    assert native.main_address.ip == "127.0.0.1"
+    assert [a.ip for a in native.addresses] == ["10.0.0.1"]
+    # And we can validate back from the native object.
+    m2 = PeerModel.from_cpp(native)
+    assert m2.peer_id == "P"
+
+

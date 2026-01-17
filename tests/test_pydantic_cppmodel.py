@@ -46,8 +46,19 @@ def test_cpp_model_decorator_no_env_no_import() -> None:
 
 def test_cpp_model_decorator_default_is_fail_fast_on_missing_native() -> None:
     os.environ.pop("PYMERGETIC_CPPMODEL_VALIDATE", None)
-    with pytest.raises(ImportError, match="could not import native module"):
-        @cpp_model("definitely.not.real.NativeType")
+    # Default is validate="lazy": should not import at decoration time, but should fail on first use.
+    @cpp_model("definitely.not.real.NativeType")
+    class M(CppModel):
+        x: int
+
+    with pytest.raises(ModuleNotFoundError):
+        M.validate_cpp_binding()
+
+
+def test_cpp_model_decorator_import_mode_is_fail_fast_on_missing_native() -> None:
+    os.environ.pop("PYMERGETIC_CPPMODEL_VALIDATE", None)
+    with pytest.raises(Exception):
+        @cpp_model("definitely.not.real.NativeType", validate="import")
         class M(CppModel):
             x: int
 
@@ -71,11 +82,15 @@ def test_cpp_model_decorator_env_checks_field_names() -> None:
         addresses: list[str]
 
     assert getattr(Good, "__cpp_type__") == "tmp_native_mod.Native"
+    # Lazy validation: should pass on first use.
+    Good.validate_cpp_binding()
 
     with pytest.raises(TypeError, match="fields not found"):
         @cpp_model("tmp_native_mod.Native")
         class Bad(CppModel):
             missing_field: str
+
+        Bad.validate_cpp_binding()
 
     os.environ.pop("PYMERGETIC_CPPMODEL_VALIDATE", None)
 
