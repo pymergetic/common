@@ -2,9 +2,83 @@ from __future__ import annotations
 
 import os
 from importlib import import_module
-from typing import Any, TypeVar, Callable, Type, cast, Iterable
+from typing import Any, TypeVar, Callable, Type, cast, Iterable, Iterator
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
+
+
+class _BoundList(list):
+    """A list that notifies its owning CppModel on structural mutations.
+
+    This exists to avoid the silent desync where `model.list_field.append(...)`
+    mutates only Python state. When bound, we re-sync the corresponding native
+    container after each structural mutation.
+
+    Notes:
+    - Element *mutations* like `model.list_field[i].x = ...` are handled by the
+      child model's own write-through binding (no container rebuild).
+    - Structural mutations are currently implemented as a re-sync of the entire
+      container (O(N)). For true O(1) structural edits, we'd need a dedicated
+      nanobind-exposed vector wrapper (push_back/erase/etc.) instead of relying
+      on automatic STL conversions.
+    """
+
+    def __init__(self, owner: "CppModel", field_name: str, iterable: Iterable[Any] = ()) -> None:
+        super().__init__(iterable)
+        self._owner = owner
+        self._field_name = field_name
+
+    def _sync(self) -> None:
+        self._owner._on_bound_list_mutation(self._field_name)
+
+    # Structural mutation hooks
+    def append(self, item: Any) -> None:  # noqa: ANN401
+        super().append(item)
+        self._sync()
+
+    def extend(self, iterable: Iterable[Any]) -> None:  # noqa: ANN401
+        super().extend(iterable)
+        self._sync()
+
+    def insert(self, index: int, item: Any) -> None:  # noqa: ANN401
+        super().insert(index, item)
+        self._sync()
+
+    def pop(self, index: int = -1) -> Any:  # noqa: ANN401
+        v = super().pop(index)
+        self._sync()
+        return v
+
+    def remove(self, item: Any) -> None:  # noqa: ANN401
+        super().remove(item)
+        self._sync()
+
+    def clear(self) -> None:
+        super().clear()
+        self._sync()
+
+    def __delitem__(self, key: int | slice) -> None:
+        super().__delitem__(key)
+        self._sync()
+
+    def __setitem__(self, key: int | slice, value: Any) -> None:  # noqa: ANN401
+        super().__setitem__(key, value)
+        self._sync()
+
+    def sort(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        super().sort(*args, **kwargs)
+        self._sync()
+
+    def reverse(self) -> None:
+        super().reverse()
+        self._sync()
+
+    # Preserve type on slicing
+    def __getitem__(self, item: int | slice) -> Any:  # noqa: ANN401
+        v = super().__getitem__(item)
+        if isinstance(item, slice):
+            return _BoundList(self._owner, self._field_name, v)
+        return v
 
 
 def _cppmodel_check_fields(model_cls: type["CppModel"], cpp_type: object) -> None:
@@ -110,9 +184,21 @@ class CppModel(BaseModel):
 
     Subclasses should define normal typed fields; validation will pull values
     from the native object's attributes.
+
+    Write-through binding:
+    - Use `Model.from_cpp(native)` to bind a validated model to a native object.
+    - Assignments like `model.x = 1` write through to `native.x`.
+    - For list fields, the model wraps them with an observable list so operations
+      like `append()` and `del` also re-sync the native container.
+
+    Important binding requirement:
+    - Nested objects MUST be exposed by nanobind using reference semantics
+      (e.g., `def_rw` or `def_prop_rw(..., rv_policy::reference_internal)`),
+      otherwise binding can attach to temporary copies.
     """
 
     _cpp_obj: object | None = PrivateAttr(default=None)
+    _cpp_sync_suspended: bool = PrivateAttr(default=False)
 
     model_config = ConfigDict(
         from_attributes=True,
@@ -159,12 +245,21 @@ class CppModel(BaseModel):
 
         self._cpp_obj = obj
         # Bind nested children to matching native attributes when possible.
-        for field_name in type(self).model_fields.keys():
-            if not hasattr(obj, field_name):
-                continue
-            native_child = getattr(obj, field_name)
-            value = getattr(self, field_name, None)
-            self._bind_nested(value, native_child)
+        # Also wrap list fields so structural mutations re-sync the native container.
+        self._cpp_sync_suspended = True
+        try:
+            for field_name in type(self).model_fields.keys():
+                if not hasattr(obj, field_name):
+                    continue
+                native_child = getattr(obj, field_name)
+                value = getattr(self, field_name, None)
+                if isinstance(value, list) and not isinstance(value, _BoundList):
+                    # Use raw setattr to avoid Pydantic coercing list subclasses back to `list`.
+                    object.__setattr__(self, field_name, _BoundList(self, field_name, value))
+                    value = getattr(self, field_name)
+                self._bind_nested(value, native_child)
+        finally:
+            self._cpp_sync_suspended = False
 
     def is_bound_cpp(self) -> bool:
         return self._cpp_obj is not None
@@ -175,15 +270,43 @@ class CppModel(BaseModel):
             return
         if name not in type(self).model_fields:
             return
+        if self._cpp_sync_suspended:
+            return
         obj = self._cpp_obj
         if obj is None:
             return
         if not hasattr(obj, name):
             return
         current = getattr(self, name)
-        native_value = self._to_native_value(current, getattr(obj, name))
-        setattr(obj, name, native_value)
-        # Rebind nested if we just assigned a new native object.
+        if isinstance(current, list) and not isinstance(current, _BoundList):
+            # Ensure list fields are observable after assignment.
+            self._cpp_sync_suspended = True
+            try:
+                object.__setattr__(self, name, _BoundList(self, name, current))
+                current = getattr(self, name)
+            finally:
+                self._cpp_sync_suspended = False
+        native_container = getattr(obj, name)
+        # Prefer in-place container update for list fields exposed as live views.
+        if isinstance(current, list) and hasattr(native_container, "clear") and hasattr(native_container, "append"):
+            native_container.clear()
+            for item in current:
+                native_container.append(self._to_native_value(item, None))
+            self._bind_nested(current, native_container)
+            return
+
+        native_value = self._to_native_value(current, native_container)
+        try:
+            setattr(obj, name, native_value)
+        except AttributeError:
+            # If there's no setter but we have a live container, try in-place.
+            if isinstance(current, list) and hasattr(native_container, "clear") and hasattr(native_container, "append"):
+                native_container.clear()
+                for item in current:
+                    native_container.append(self._to_native_value(item, None))
+                self._bind_nested(current, native_container)
+                return
+            raise
         self._bind_nested(current, getattr(obj, name))
 
     def to_cpp(self) -> object:
@@ -205,22 +328,76 @@ class CppModel(BaseModel):
         for field_name in type(self).model_fields.keys():
             if not hasattr(obj, field_name):
                 continue
-            current_native = getattr(obj, field_name)
             current_value = getattr(self, field_name)
-            native_value = self._to_native_value(current_value, current_native)
-            setattr(obj, field_name, native_value)
+            native_container = getattr(obj, field_name)
+            if isinstance(current_value, list) and hasattr(native_container, "clear") and hasattr(native_container, "append"):
+                native_container.clear()
+                for item in current_value:
+                    native_container.append(self._to_native_value(item, None))
+                self._bind_nested(current_value, native_container)
+                continue
+
+            native_value = self._to_native_value(current_value, native_container)
+            try:
+                setattr(obj, field_name, native_value)
+            except AttributeError:
+                if isinstance(current_value, list) and hasattr(native_container, "clear") and hasattr(native_container, "append"):
+                    native_container.clear()
+                    for item in current_value:
+                        native_container.append(self._to_native_value(item, None))
+                    self._bind_nested(current_value, native_container)
+                    continue
+                raise
             self._bind_nested(current_value, getattr(obj, field_name))
+
+    def _on_bound_list_mutation(self, field_name: str) -> None:
+        """Called by _BoundList after a structural mutation."""
+
+        if self._cpp_sync_suspended:
+            return
+        obj = self._cpp_obj
+        if obj is None or not hasattr(obj, field_name):
+            return
+        current = getattr(self, field_name, None)
+        native_container = getattr(obj, field_name)
+
+        # Prefer in-place container mutation when the binding exposes a live container
+        # (e.g., a nanobind "view" with clear()/append()).
+        if hasattr(native_container, "clear") and hasattr(native_container, "append"):
+            native_container.clear()
+            if isinstance(current, list):
+                for item in current:
+                    native_item = self._to_native_value(item, None)
+                    native_container.append(native_item)
+            # Rebind from the live container (no setattr needed).
+            self._bind_nested(current, native_container)
+            return
+
+        # Fallback: best-effort attribute assignment (works only if setter is live).
+        native_value = self._to_native_value(current, native_container)
+        setattr(obj, field_name, native_value)
+        self._bind_nested(current, getattr(obj, field_name))
 
     def _bind_nested(self, value: Any, native_value: Any) -> None:  # noqa: ANN401
         if isinstance(value, CppModel):
             value.bind_cpp(native_value)
             return
-        if isinstance(value, list) and isinstance(native_value, Iterable):
-            # Try to bind element-wise (zip) for lists of models.
-            native_list = list(native_value)
-            for v, nv in zip(value, native_list, strict=False):
-                if isinstance(v, CppModel):
-                    v.bind_cpp(nv)
+        if isinstance(value, list):
+            # Bind element-wise. Avoid materializing lists if the native value is a
+            # live indexed container (preferred).
+            if hasattr(native_value, "__len__") and hasattr(native_value, "__getitem__"):
+                n = len(native_value)  # type: ignore[arg-type]
+                for i, v in enumerate(value):
+                    if i >= n:
+                        break
+                    if isinstance(v, CppModel):
+                        v.bind_cpp(native_value[i])  # type: ignore[index]
+                return
+            if isinstance(native_value, Iterable):
+                native_list = list(native_value)
+                for v, nv in zip(value, native_list, strict=False):
+                    if isinstance(v, CppModel):
+                        v.bind_cpp(nv)
 
     def _to_native_value(self, value: Any, current_native: Any) -> Any:  # noqa: ANN401
         # Prefer reusing already-bound native objects to avoid allocations/copies.

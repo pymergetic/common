@@ -75,7 +75,47 @@ def test_common_cpp_extension_nested_write_through() -> None:
 
     assert native.peer_id == "NewPeer"
     assert native.main_address.ip == "1.1.1.1"
-    assert [a.ip for a in native.addresses] == ["10.9.9.9", "10.0.0.2"]
+    assert [native.addresses[i].ip for i in range(len(native.addresses))] == ["10.9.9.9", "10.0.0.2"]
+
+
+def test_common_cpp_extension_list_append_syncs_native() -> None:
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+
+    @cpp_model("pymergetic.common._test_internal.NativeAddress", validate="lazy")
+    class AddressModel(CppModel):
+        ip: str
+
+    @cpp_model("pymergetic.common._test_internal.NativePeerNested", validate="lazy")
+    class PeerModel(CppModel):
+        peer_id: str
+        main_address: AddressModel
+        addresses: list[AddressModel]
+
+    native = ext.make_native_peer_nested()
+    model = PeerModel.from_cpp(native)
+
+    model.addresses.append(AddressModel(ip="10.0.0.3"))
+    assert [native.addresses[i].ip for i in range(len(native.addresses))] == ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+
+
+def test_common_cpp_extension_list_delete_syncs_native() -> None:
+    ext = pytest.importorskip("pymergetic.common._test_internal", exc_type=ImportError)
+
+    @cpp_model("pymergetic.common._test_internal.NativeAddress", validate="lazy")
+    class AddressModel(CppModel):
+        ip: str
+
+    @cpp_model("pymergetic.common._test_internal.NativePeerNested", validate="lazy")
+    class PeerModel(CppModel):
+        peer_id: str
+        main_address: AddressModel
+        addresses: list[AddressModel]
+
+    native = ext.make_native_peer_nested()
+    model = PeerModel.from_cpp(native)
+
+    del model.addresses[0]
+    assert [native.addresses[i].ip for i in range(len(native.addresses))] == ["10.0.0.2"]
 
 
 def test_common_cpp_extension_to_cpp_roundtrip() -> None:
@@ -100,7 +140,7 @@ def test_common_cpp_extension_to_cpp_roundtrip() -> None:
 
     assert native.peer_id == "P"
     assert native.main_address.ip == "127.0.0.1"
-    assert [a.ip for a in native.addresses] == ["10.0.0.1"]
+    assert [native.addresses[i].ip for i in range(len(native.addresses))] == ["10.0.0.1"]
     # And we can validate back from the native object.
     m2 = PeerModel.from_cpp(native)
     assert m2.peer_id == "P"

@@ -20,11 +20,68 @@ struct NativeAddress {
   std::string ip;
 };
 
+struct NativePeerNested;
+
+struct NativeAddressVecView {
+  NativePeerNested* owner{};
+
+  std::size_t size() const;
+  NativeAddress& at(std::size_t i);
+  void set(std::size_t i, NativeAddress v);
+  void append(NativeAddress v);
+  void erase(std::size_t i);
+  void clear();
+};
+
 struct NativePeerNested {
   std::string peer_id;
   NativeAddress main_address;
-  std::vector<NativeAddress> addresses;
+  std::vector<NativeAddress> addresses_storage;
+  NativeAddressVecView addresses;
+
+  NativePeerNested() {
+    addresses.owner = this;
+  }
+
+  NativePeerNested(const NativePeerNested& other)
+      : peer_id(other.peer_id),
+        main_address(other.main_address),
+        addresses_storage(other.addresses_storage) {
+    addresses.owner = this;
+  }
+
+  NativePeerNested(NativePeerNested&& other) noexcept
+      : peer_id(std::move(other.peer_id)),
+        main_address(std::move(other.main_address)),
+        addresses_storage(std::move(other.addresses_storage)) {
+    addresses.owner = this;
+  }
+
+  NativePeerNested& operator=(const NativePeerNested& other) {
+    if (this == &other) return *this;
+    peer_id = other.peer_id;
+    main_address = other.main_address;
+    addresses_storage = other.addresses_storage;
+    addresses.owner = this;
+    return *this;
+  }
+
+  NativePeerNested& operator=(NativePeerNested&& other) noexcept {
+    if (this == &other) return *this;
+    peer_id = std::move(other.peer_id);
+    main_address = std::move(other.main_address);
+    addresses_storage = std::move(other.addresses_storage);
+    addresses.owner = this;
+    return *this;
+  }
 };
+
+inline std::size_t NativeAddressVecView::size() const { return owner->addresses_storage.size(); }
+inline NativeAddress& NativeAddressVecView::at(std::size_t i) { return owner->addresses_storage.at(i); }
+inline void NativeAddressVecView::set(std::size_t i, NativeAddress v) { owner->addresses_storage.at(i) = std::move(v); }
+inline void NativeAddressVecView::append(NativeAddress v) { owner->addresses_storage.push_back(std::move(v)); }
+inline void NativeAddressVecView::erase(std::size_t i) { owner->addresses_storage.erase(owner->addresses_storage.begin() + static_cast<std::ptrdiff_t>(i)); }
+inline void NativeAddressVecView::clear() { owner->addresses_storage.clear(); }
 
 }  // namespace pymergetic::common
 
@@ -46,18 +103,35 @@ NB_MODULE(_test_internal, m) {
       .def(nb::init<>())
       .def_rw("ip", &pymergetic::common::NativeAddress::ip);
 
+  nb::class_<pymergetic::common::NativeAddressVecView>(m, "NativeAddressVecView")
+      .def("__len__", [](const pymergetic::common::NativeAddressVecView& v) { return v.size(); })
+      .def(
+          "__getitem__",
+          [](pymergetic::common::NativeAddressVecView& v, std::size_t i) -> pymergetic::common::NativeAddress& {
+            return v.at(i);
+          },
+          nb::rv_policy::reference_internal)
+      .def("__setitem__", [](pymergetic::common::NativeAddressVecView& v, std::size_t i, pymergetic::common::NativeAddress a) {
+        v.set(i, std::move(a));
+      })
+      .def("append", [](pymergetic::common::NativeAddressVecView& v, pymergetic::common::NativeAddress a) {
+        v.append(std::move(a));
+      })
+      .def("erase", [](pymergetic::common::NativeAddressVecView& v, std::size_t i) { v.erase(i); })
+      .def("clear", [](pymergetic::common::NativeAddressVecView& v) { v.clear(); });
+
   nb::class_<pymergetic::common::NativePeerNested>(m, "NativePeerNested")
       .def(nb::init<>())
       .def_rw("peer_id", &pymergetic::common::NativePeerNested::peer_id)
       .def_rw("main_address", &pymergetic::common::NativePeerNested::main_address)
-      .def_rw("addresses", &pymergetic::common::NativePeerNested::addresses);
+      .def_ro("addresses", &pymergetic::common::NativePeerNested::addresses, nb::rv_policy::reference_internal);
 
   m.def("make_native_peer_nested", []() {
     pymergetic::common::NativePeerNested p;
     p.peer_id = "QmHash";
     p.main_address.ip = "127.0.0.1";
-    p.addresses.push_back(pymergetic::common::NativeAddress{.ip = "10.0.0.1"});
-    p.addresses.push_back(pymergetic::common::NativeAddress{.ip = "10.0.0.2"});
+    p.addresses.append(pymergetic::common::NativeAddress{.ip = "10.0.0.1"});
+    p.addresses.append(pymergetic::common::NativeAddress{.ip = "10.0.0.2"});
     return p;
   });
 }
