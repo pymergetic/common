@@ -5,6 +5,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <pymergetic/nb/base.hpp>
+#include <pymergetic/nb/data.hpp>
 
 namespace nb = nanobind;
 
@@ -108,6 +109,12 @@ NB_MODULE(_test_internal, m) {
       .def("to_dict", &pymergetic::nb::CppObject::to_dict)
       .def("__repr__", &pymergetic::nb::CppObject::repr);
 
+  // ---- CppDataObject / PyDataObject pattern smoke ----
+  nb::class_<pymergetic::nb::CppDataObject, pymergetic::nb::CppObject>(m, "CppDataObject")
+      .def("serialize", &pymergetic::nb::CppDataObject::serialize)
+      .def("to_dict", &pymergetic::nb::CppDataObject::to_dict)
+      .def("__repr__", &pymergetic::nb::CppDataObject::repr);
+
   struct NetworkService : public pymergetic::nb::CppObject {
     std::string status = "disconnected";
     void connect(std::string url) { status = "connected:" + url; }
@@ -131,6 +138,81 @@ NB_MODULE(_test_internal, m) {
   m.def("cpp_hold_network_service", [](std::shared_ptr<NetworkService> s) { _held_service = std::move(s); });
   m.def("cpp_get_held_network_service", []() { return _held_service; });
   m.def("cpp_clear_held_network_service", []() { _held_service.reset(); });
+
+  // Example pure data object (idempotent bytes roundtrip).
+  struct DataPoint : public pymergetic::nb::CppDataObject {
+    std::int32_t a = 0;
+    std::string b;
+
+    std::string repr() const override { return "<DataPoint>"; }
+
+    nb::dict to_dict() const override {
+      nb::dict d;
+      d["a"] = a;
+      d["b"] = b;
+      return d;
+    }
+
+    nb::bytes serialize() const override {
+      // Format: [u8 version=1][i32 little][u32 len][bytes]
+      std::string out;
+      out.push_back(static_cast<char>(1));
+      auto put_u32 = [&](std::uint32_t v) {
+        out.push_back(static_cast<char>(v & 0xFF));
+        out.push_back(static_cast<char>((v >> 8) & 0xFF));
+        out.push_back(static_cast<char>((v >> 16) & 0xFF));
+        out.push_back(static_cast<char>((v >> 24) & 0xFF));
+      };
+      auto put_i32 = [&](std::int32_t v) { put_u32(static_cast<std::uint32_t>(v)); };
+      put_i32(a);
+      put_u32(static_cast<std::uint32_t>(b.size()));
+      out.append(b);
+      return nb::bytes(out.data(), out.size());
+    }
+
+    static std::shared_ptr<DataPoint> deserialize(nb::bytes data) {
+      const char* p = data.c_str();
+      const std::size_t n = data.size();
+      if (n < 1 + 4 + 4) {
+        throw std::runtime_error("DataPoint: buffer too small");
+      }
+      const std::uint8_t ver = static_cast<std::uint8_t>(p[0]);
+      if (ver != 1) {
+        throw std::runtime_error("DataPoint: unsupported version");
+      }
+      auto get_u32 = [&](std::size_t off) -> std::uint32_t {
+        return (static_cast<std::uint32_t>(static_cast<unsigned char>(p[off])) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(p[off + 1])) << 8) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(p[off + 2])) << 16) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(p[off + 3])) << 24));
+      };
+      const std::int32_t a = static_cast<std::int32_t>(get_u32(1));
+      const std::uint32_t len = get_u32(1 + 4);
+      if (n < 1 + 4 + 4 + len) {
+        throw std::runtime_error("DataPoint: invalid length");
+      }
+      auto obj = std::make_shared<DataPoint>();
+      obj->a = a;
+      obj->b.assign(p + (1 + 4 + 4), p + (1 + 4 + 4 + len));
+      return obj;
+    }
+  };
+
+  nb::class_<DataPoint, pymergetic::nb::CppDataObject>(m, "DataPoint")
+      .def(nb::init<>())
+      .def_rw("a", &DataPoint::a)
+      .def_rw("b", &DataPoint::b)
+      .def("serialize", &DataPoint::serialize)
+      .def_static("deserialize", &DataPoint::deserialize)
+      .def("to_dict", &DataPoint::to_dict)
+      .def("__repr__", &DataPoint::repr);
+
+  m.def("make_datapoint", [](std::int32_t a, std::string b) {
+    auto dp = std::make_shared<DataPoint>();
+    dp->a = a;
+    dp->b = std::move(b);
+    return dp;
+  });
 
   nb::class_<pymergetic::common::NativePeerInfo>(m, "NativePeerInfo")
       .def(nb::init<>())

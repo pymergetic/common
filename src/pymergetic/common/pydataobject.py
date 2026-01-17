@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+from typing import Any, Callable, ClassVar, Generic, TypeVar
+
+
+T = TypeVar("T")
+
+
+class PyDataObject(Generic[T]):
+    """Pydantic-friendly wrapper for *pure data* native objects.
+
+    Unlike `PyObject`, this represents idempotently recoverable data.
+
+    Contract for the native type (nanobind-exposed):
+    - `serialize() -> bytes`
+    - `@staticmethod deserialize(data: bytes) -> NativeType`
+    - optionally `to_dict() -> dict` and `__repr__`
+    """
+
+    __slots__ = ("_handle",)
+
+    # Concrete subclasses MUST set this.
+    _native_type: ClassVar[Any]
+
+    def __init__(self, handle: T) -> None:
+        self._handle = handle
+
+    @property
+    def cpp(self) -> T:
+        return self._handle
+
+    def to_bytes(self) -> bytes:
+        return bytes(self._handle.serialize())  # type: ignore[attr-defined]
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "PyDataObject[T]":
+        native_type = getattr(cls, "_native_type", None)
+        if native_type is None:
+            raise TypeError(f"{cls.__name__} must define _native_type")
+        handle = native_type.deserialize(data)  # type: ignore[attr-defined]
+        return cls(handle)
+
+    def to_dict(self) -> dict:
+        # Optional, for debugging/inspection.
+        if hasattr(self._handle, "to_dict"):
+            return dict(self._handle.to_dict())  # type: ignore[attr-defined]
+        return {}
+
+    def __repr__(self) -> str:
+        return repr(self._handle)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        _source_type: Any,
+        _handler: Callable[[Any], Any],
+    ) -> Any:
+        """Pydantic v2 integration (round-trip safe).
+
+        JSON representation is bytes (base64 in JSON), so the object is
+        idempotently recoverable.
+        """
+
+        from pydantic_core import core_schema
+
+        def _from_native(v: Any) -> "PyDataObject[T]":  # noqa: ANN401
+            native_type = getattr(cls, "_native_type", None)
+            if native_type is None:
+                raise TypeError(f"{cls.__name__} must define _native_type")
+            if isinstance(v, cls):
+                return v
+            if isinstance(v, native_type):
+                return cls(v)
+            raise TypeError(f"Expected {cls.__name__} or {native_type}, got {type(v)}")
+
+        def _from_bytes(v: bytes) -> "PyDataObject[T]":
+            return cls.from_bytes(v)
+
+        return core_schema.json_or_python_schema(
+            json_schema=core_schema.no_info_after_validator_function(
+                _from_bytes,
+                core_schema.bytes_schema(),
+            ),
+            python_schema=core_schema.no_info_plain_validator_function(_from_native),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                cls._pydantic_serialize,
+                info_arg=False,
+                when_used="json",
+            ),
+        )
+
+    @staticmethod
+    def _pydantic_serialize(obj: "PyDataObject[Any]") -> bytes:
+        return obj.to_bytes()
+
+
+__all__ = ["PyDataObject"]
+
+
