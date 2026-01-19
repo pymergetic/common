@@ -280,11 +280,6 @@ namespace pymergetic::common::bindings {
 namespace nb = ::nanobind;
 
 void bind_net(::nanobind::module_& m) {
-  // Exception mapping (codec)
-  nb::exception<pymergetic::common::CodecError>(m, "CodecError");
-  nb::exception<pymergetic::common::EndOfStreamError>(m, "EndOfStreamError");
-  nb::exception<pymergetic::common::MagicMismatchError>(m, "MagicMismatchError");
-
   // --- Canonical connection info ---
   nb::enum_<pymergetic::common::net::TransportKind>(m, "TransportKind")
       .value("Unknown", pymergetic::common::net::TransportKind::Unknown)

@@ -102,7 +102,14 @@ pymergetic_add_extension(_test_internal
 # --- 2c) Runtime net module (L4/L6 reference implementation) ---
 pymergetic_add_extension(_internal
     src_bind/pymergetic/common/_internal/module.cpp
+    src_bind/pymergetic/common/base/bind.cpp
+    src_bind/pymergetic/common/codec/bind.cpp
+    src_bind/pymergetic/common/exceptions/bind.cpp
+    src_bind/pymergetic/common/header/bind.cpp
+    src_bind/pymergetic/common/nb/bind.cpp
     src_bind/pymergetic/common/net/bind.cpp
+    src_bind/pymergetic/common/objects/bind.cpp
+    src_bind/pymergetic/common/runtime/bind.cpp
 )
 
 # --- 3) Install headers + export CMake package ---
