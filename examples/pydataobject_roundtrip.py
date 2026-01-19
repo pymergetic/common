@@ -9,8 +9,7 @@ def main() -> None:
     # This sample uses the common package's test extension to demonstrate the API.
     from pymergetic.common import _test_internal as ext  # type: ignore
 
-    class DataPoint(PyDataObject[object]):
-        _native_type = ext.DataPoint
+    DataPoint = PyDataObject.native(ext.DataPoint)
 
     dp = DataPoint(ext.make_datapoint(7, "hello"))
     blob = dp.to_bytes()

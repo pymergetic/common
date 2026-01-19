@@ -59,7 +59,7 @@ dev = [
 [tool.scikit-build]
 cmake.version = ">=3.25"
 logging.level = "INFO"
-wheel.packages = ["src/pymergetic"]
+wheel.packages = ["src_py/pymergetic"]
 
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"

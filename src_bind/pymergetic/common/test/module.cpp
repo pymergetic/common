@@ -4,11 +4,10 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
-#include <pymergetic/nb/base.hpp>
-#include <pymergetic/nb/data.hpp>
-#include <pymergetic/nb/asyncio_bridge.hpp>
+#include <pymergetic/common/nb/__init__.hpp>
 
-#include <pymergetic/common/codec.hpp>
+#include <pymergetic/common/codec/__init__.hpp>
+#include <pymergetic/common/exceptions/__init__.hpp>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
@@ -112,6 +111,11 @@ inline void NativeAddressVecView::clear() { owner->addresses_storage.clear(); }
 
 NB_MODULE(_test_internal, m) {
   m.doc() = "pymergetic-common test extension (nanobind)";
+
+  // --- Exception mapping (C++ -> Python) ---
+  nb::exception<pymergetic::common::CodecError>(m, "CodecError");
+  nb::exception<pymergetic::common::EndOfStreamError>(m, "EndOfStreamError");
+  nb::exception<pymergetic::common::MagicMismatchError>(m, "MagicMismatchError");
 
   m.def("add", [](int a, int b) { return a + b; });
 
@@ -245,7 +249,7 @@ NB_MODULE(_test_internal, m) {
       const std::size_t n = data.size();
       const auto h = pymergetic::common::codec::read_header(p, n);
       if (h.type_id != k_type_id) {
-        throw std::runtime_error("DataPoint: wrong type_id");
+        throw pymergetic::common::CodecError("DataPoint: wrong type_id");
       }
       const std::size_t off0 = h.payload_off;
       const std::int32_t a = pymergetic::common::codec::read_i32_le(p, n, off0);

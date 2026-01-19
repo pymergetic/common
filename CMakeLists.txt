@@ -8,6 +8,17 @@ include(FetchContent)
 # Ensure Python development headers/targets are available for nanobind + modules.
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 
+# CMake's Python imported targets vary by version/config.
+# Prefer Python::Module (extension modules), fall back to Python::Python.
+set(PYMERGETIC_PYTHON_TARGET "")
+if(TARGET Python::Module)
+    set(PYMERGETIC_PYTHON_TARGET Python::Module)
+elseif(TARGET Python::Python)
+    set(PYMERGETIC_PYTHON_TARGET Python::Python)
+else()
+    message(FATAL_ERROR "Python imported target not found (expected Python::Module or Python::Python)")
+endif()
+
 # Nanobind (tooling) - fetch so builds don't depend on a preinstalled CMake package.
 FetchContent_Declare(
     nanobind
@@ -21,7 +32,7 @@ FetchContent_MakeAvailable(nanobind)
 # Python distributions (e.g. uv-managed Python).
 foreach(_nb_tgt IN ITEMS nanobind nanobind-static nanobind_shared)
     if(TARGET ${_nb_tgt})
-        target_link_libraries(${_nb_tgt} PRIVATE Python::Module)
+        target_link_libraries(${_nb_tgt} PRIVATE ${PYMERGETIC_PYTHON_TARGET})
     endif()
 endforeach()
 
@@ -35,7 +46,7 @@ set_target_properties(pymergetic_common_interface PROPERTIES
 )
 
 target_include_directories(pymergetic_common_interface INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src_cpp>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -64,7 +75,7 @@ target_include_directories(pymergetic_common_interface INTERFACE
 function(pymergetic_add_extension target_name)
     nanobind_add_module(${target_name} NB_SHARED ${ARGN})
     target_link_libraries(${target_name} PRIVATE pymergetic::common_interface)
-    target_link_libraries(${target_name} PRIVATE Python::Module)
+    target_link_libraries(${target_name} PRIVATE ${PYMERGETIC_PYTHON_TARGET})
     # Boost is considered foundational for native async I/O (Boost.Asio). We keep
     # it header-only here and let consumers fetch/provide headers via the
     # pymergetic_commonConfig.cmake.
@@ -85,17 +96,30 @@ endfunction()
 
 # --- 2b) Test extension (ensures the SDK build path works in CI) ---
 pymergetic_add_extension(_test_internal
-    src/bindings/test_module.cpp
+    src_bind/pymergetic/common/test/module.cpp
+)
+
+# --- 2c) Runtime net module (L4/L6 reference implementation) ---
+pymergetic_add_extension(_internal
+    src_bind/pymergetic/common/_internal/module.cpp
+    src_bind/pymergetic/common/net/bind.cpp
 )
 
 # --- 3) Install headers + export CMake package ---
-install(DIRECTORY src/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# Install C++ headers (mirrors the `pymergetic/...` include prefix)
+install(DIRECTORY src_cpp/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 install(TARGETS pymergetic_common_interface
     EXPORT PymergeticCommonTargets
 )
 
 install(TARGETS _test_internal
+    LIBRARY DESTINATION pymergetic/common
+    RUNTIME DESTINATION pymergetic/common
+    ARCHIVE DESTINATION pymergetic/common
+)
+
+install(TARGETS _internal
     LIBRARY DESTINATION pymergetic/common
     RUNTIME DESTINATION pymergetic/common
     ARCHIVE DESTINATION pymergetic/common

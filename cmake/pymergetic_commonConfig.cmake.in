@@ -5,6 +5,16 @@ include(CMakeFindDependencyMacro)
 # nanobind is required for pymergetic_add_extension(). Prefer a system install,
 # but fall back to fetching a pinned version for reproducible builds.
 find_dependency(Python COMPONENTS Interpreter Development.Module)
+
+# Match the build-time behavior: prefer Python::Module, fall back to Python::Python.
+set(PYMERGETIC_PYTHON_TARGET "")
+if(TARGET Python::Module)
+  set(PYMERGETIC_PYTHON_TARGET Python::Module)
+elseif(TARGET Python::Python)
+  set(PYMERGETIC_PYTHON_TARGET Python::Python)
+else()
+  message(FATAL_ERROR "Python imported target not found (expected Python::Module or Python::Python)")
+endif()
 find_dependency(nanobind CONFIG QUIET)
 if(NOT nanobind_FOUND)
   include(FetchContent)
@@ -35,7 +45,7 @@ endif()
 function(pymergetic_add_extension target_name)
     nanobind_add_module(${target_name} NB_SHARED ${ARGN})
     target_link_libraries(${target_name} PRIVATE pymergetic::common_interface)
-    target_link_libraries(${target_name} PRIVATE Python::Module)
+    target_link_libraries(${target_name} PRIVATE ${PYMERGETIC_PYTHON_TARGET})
     target_include_directories(${target_name} PRIVATE ${PYMERGETIC_BOOST_INCLUDE_DIR})
     # Keep Boost.System header-only for portability.
     target_compile_definitions(${target_name} PRIVATE BOOST_ERROR_CODE_HEADER_ONLY=1 BOOST_SYSTEM_NO_DEPRECATED=1)

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import base64
+import types
+import weakref
 from typing import Any, Callable, ClassVar, Generic, TypeVar
 
 
 T = TypeVar("T")
+
+_PYDATAOBJECT_TYPE_CACHE: "weakref.WeakKeyDictionary[Any, type[PyDataObject[Any]]]" = weakref.WeakKeyDictionary()
 
 
 class PyDataObject(Generic[T]):
@@ -22,6 +26,39 @@ class PyDataObject(Generic[T]):
 
     # Concrete subclasses MUST set this.
     _native_type: ClassVar[Any]
+
+    @classmethod
+    def native(cls, native_type: Any, *, name: str | None = None) -> type["PyDataObject[Any]"]:
+        """Create (and cache) a concrete PyDataObject wrapper for a native type.
+
+        This avoids boilerplate like:
+
+            class X(PyDataObject[object]):
+                _native_type = ext.X
+
+        Usage:
+            X = PyDataObject.native(ext.X)
+            x = X(ext.make_x(...))
+        """
+
+        cached = _PYDATAOBJECT_TYPE_CACHE.get(native_type)
+        if cached is not None:
+            return cached
+
+        cls_name = name or getattr(native_type, "__name__", "NativeDataObject")
+        # IMPORTANT: do not use `PyDataObject[Any]` here (it's a typing alias, not a real class).
+        wrapper = types.new_class(
+            cls_name,
+            (PyDataObject,),
+            exec_body=lambda ns: ns.update(
+                {
+                    "_native_type": native_type,
+                    "__module__": cls.__module__,
+                }
+            ),
+        )
+        _PYDATAOBJECT_TYPE_CACHE[native_type] = wrapper
+        return wrapper
 
     def __init__(self, handle: T) -> None:
         self._handle = handle

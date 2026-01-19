@@ -2,8 +2,8 @@
 
 #include <nanobind/nanobind.h>
 
-#include <pymergetic/common/data.hpp>
-#include <pymergetic/nb/base.hpp>
+#include <pymergetic/common/objects/__init__.hpp>
+#include <pymergetic/common/nb/base.hpp>
 
 namespace pymergetic::nb {
 
