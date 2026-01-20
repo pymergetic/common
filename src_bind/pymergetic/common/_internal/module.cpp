@@ -10,6 +10,7 @@ void bind_nb(::nanobind::module_& m);
 void bind_net(::nanobind::module_& m);
 void bind_objects(::nanobind::module_& m);
 void bind_runtime(::nanobind::module_& m);
+void bind_session(::nanobind::module_& m);
 }  // namespace pymergetic::common::bindings
 
 NB_MODULE(_internal, m) {
@@ -22,6 +23,7 @@ NB_MODULE(_internal, m) {
   pymergetic::common::bindings::bind_net(m);
   pymergetic::common::bindings::bind_objects(m);
   pymergetic::common::bindings::bind_runtime(m);
+  pymergetic::common::bindings::bind_session(m);
 }
 
 

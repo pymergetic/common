@@ -16,6 +16,10 @@ Frame = _ni.Frame
 from pymergetic.common.net.peer_info import AuthKind, PeerInfo, TransportKind
 UdsDialer = _ni.UdsDialer
 UdsStream = _ni.UdsStream
+UdsAcceptor = _ni.UdsAcceptor
+TcpDialer = _ni.TcpDialer
+TcpStream = _ni.TcpStream
+TcpAcceptor = _ni.TcpAcceptor
 PmdgChannel = _ni.PmdgChannel
 
 CodecError = _ni.CodecError
@@ -29,6 +33,10 @@ __all__ = [
     "AuthKind",
     "UdsDialer",
     "UdsStream",
+    "UdsAcceptor",
+    "TcpDialer",
+    "TcpStream",
+    "TcpAcceptor",
     "PmdgChannel",
     "CodecError",
     "EndOfStreamError",

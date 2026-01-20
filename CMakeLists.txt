@@ -110,6 +110,7 @@ pymergetic_add_extension(_internal
     src_bind/pymergetic/common/net/bind.cpp
     src_bind/pymergetic/common/objects/bind.cpp
     src_bind/pymergetic/common/runtime/bind.cpp
+    src_bind/pymergetic/common/session/bind.cpp
 )
 
 # --- 3) Install headers + export CMake package ---
