@@ -5,8 +5,11 @@
 It centralizes:
 
 - **Python dependency groups** (extras) used across Pymergetic packages
-- **C++ build-time SDK** helpers (CMake interface target + macros) to unify hybrid extension builds
+- **Shared C++ conventions** (foundation headers and patterns)
 - Shared low-level Python utilities (e.g., header/impl wiring)
+
+The build-time C++ SDK lives in `easybind` now (CMake interface target + helper
+macros for unified hybrid extension builds).
 
 ## Samples (runnable)
 

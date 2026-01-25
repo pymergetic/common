@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "pymergetic-common"
 dynamic = ["version"]
-description = "Shared dependency groups + build-time SDK for the Pymergetic ecosystem"
+description = "Shared dependency groups + foundational utilities for PymergeticOS"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

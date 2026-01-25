@@ -2,64 +2,14 @@
 
 include(CMakeFindDependencyMacro)
 
-# nanobind is required for pymergetic_add_extension(). Prefer a system install,
-# but fall back to fetching a pinned version for reproducible builds.
-find_dependency(Python COMPONENTS Interpreter Development.Module)
-
-# Match the build-time behavior: prefer Python::Module, fall back to Python::Python.
-set(PYMERGETIC_PYTHON_TARGET "")
-if(TARGET Python::Module)
-  set(PYMERGETIC_PYTHON_TARGET Python::Module)
-elseif(TARGET Python::Python)
-  set(PYMERGETIC_PYTHON_TARGET Python::Python)
-else()
-  message(FATAL_ERROR "Python imported target not found (expected Python::Module or Python::Python)")
-endif()
-find_dependency(nanobind CONFIG QUIET)
-if(NOT nanobind_FOUND)
-  include(FetchContent)
-  FetchContent_Declare(
-    nanobind
-    GIT_REPOSITORY https://github.com/wjakob/nanobind.git
-    GIT_TAG v2.9.2
-  )
-  FetchContent_MakeAvailable(nanobind)
-endif()
+find_dependency(easybind CONFIG REQUIRED)
 
 include("${CMAKE_CURRENT_LIST_DIR}/pymergetic_commonTargets.cmake")
 
-# Boost headers are considered foundational (Boost.Asio). Prefer system headers,
-# otherwise fetch a pinned release archive.
-find_path(PYMERGETIC_BOOST_INCLUDE_DIR boost/asio.hpp)
-if(NOT PYMERGETIC_BOOST_INCLUDE_DIR)
-  include(FetchContent)
-  set(_pymergetic_boost_ver "1.85.0")
-  string(REPLACE "." "_" _pymergetic_boost_ver_us "${_pymergetic_boost_ver}")
-  set(_pymergetic_boost_url "https://archives.boost.io/release/${_pymergetic_boost_ver}/source/boost_${_pymergetic_boost_ver_us}.tar.gz")
-  FetchContent_Declare(pymergetic_boost URL ${_pymergetic_boost_url})
-  FetchContent_MakeAvailable(pymergetic_boost)
-  set(PYMERGETIC_BOOST_INCLUDE_DIR "${pymergetic_boost_SOURCE_DIR}")
-endif()
-
 # Also export the helper macro for consumers using find_package(pymergetic_common).
 function(pymergetic_add_extension target_name)
-    nanobind_add_module(${target_name} NB_SHARED ${ARGN})
+    easybind_add_extension(${target_name} ${ARGN})
     target_link_libraries(${target_name} PRIVATE pymergetic::common_interface)
-    target_link_libraries(${target_name} PRIVATE ${PYMERGETIC_PYTHON_TARGET})
-    target_include_directories(${target_name} PRIVATE ${PYMERGETIC_BOOST_INCLUDE_DIR})
-    # Keep Boost.System header-only for portability.
-    target_compile_definitions(${target_name} PRIVATE BOOST_ERROR_CODE_HEADER_ONLY=1 BOOST_SYSTEM_NO_DEPRECATED=1)
-    if(APPLE)
-        set_target_properties(${target_name} PROPERTIES
-            BUILD_RPATH "@loader_path"
-            INSTALL_RPATH "@loader_path"
-        )
-    else()
-        set_target_properties(${target_name} PROPERTIES
-            BUILD_RPATH "$ORIGIN"
-            INSTALL_RPATH "$ORIGIN"
-        )
-    endif()
 endfunction()
 
 
