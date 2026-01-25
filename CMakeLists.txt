@@ -16,7 +16,9 @@ FetchContent_MakeAvailable(easybind)
 add_library(pymergetic_common_interface INTERFACE)
 add_library(pymergetic::common_interface ALIAS pymergetic_common_interface)
 
-target_link_libraries(pymergetic_common_interface INTERFACE easybind::build_interface)
+target_link_libraries(pymergetic_common_interface INTERFACE
+    $<BUILD_INTERFACE:easybind::build_interface>
+)
 
 target_include_directories(pymergetic_common_interface INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src_cpp>
@@ -31,28 +33,62 @@ function(pymergetic_add_extension target_name)
     target_link_libraries(${target_name} PRIVATE pymergetic::common_interface)
 endfunction()
 
-# --- 2b) Test extension (ensures the SDK build path works in CI) ---
-pymergetic_add_extension(_test_internal
-    src_cpp/pymergetic/common/test/__init__.cpp
+pymergetic_add_extension(common_sysinfo_internal
+    src_cpp/pymergetic/common/sysinfo/__cpp__.cpp
 )
-target_link_libraries(_test_internal PRIVATE easybind::easybind)
-set_target_properties(_test_internal PROPERTIES OUTPUT_NAME "__cpp_test__")
+target_link_libraries(common_sysinfo_internal PRIVATE easybind::easybind)
+if(DEFINED SKBUILD_PROJECT_VERSION_FULL)
+    set(_common_build_version "${SKBUILD_PROJECT_VERSION_FULL}")
+elseif(DEFINED SKBUILD_PROJECT_VERSION)
+    set(_common_build_version "${SKBUILD_PROJECT_VERSION}")
+elseif(DEFINED ENV{SKBUILD_PROJECT_VERSION})
+    set(_common_build_version "$ENV{SKBUILD_PROJECT_VERSION}")
+else()
+    set(_common_build_version "0.0.0")
+endif()
+target_compile_definitions(common_sysinfo_internal PRIVATE
+    EASYBIND_BUILD_VERSION="${_common_build_version}"
+)
+set_target_properties(common_sysinfo_internal PROPERTIES
+    OUTPUT_NAME "__cpp__"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pymergetic/common/sysinfo"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pymergetic/common/sysinfo"
+)
+if(APPLE)
+    set_target_properties(common_sysinfo_internal PROPERTIES
+        BUILD_RPATH "@loader_path/..;@loader_path/../../easybind"
+        INSTALL_RPATH "@loader_path/..;@loader_path/../../easybind"
+    )
+else()
+    set_target_properties(common_sysinfo_internal PROPERTIES
+        BUILD_RPATH "$ORIGIN/..;$ORIGIN/../../easybind"
+        INSTALL_RPATH "$ORIGIN/..;$ORIGIN/../../easybind"
+    )
+endif()
 
-# --- 2c) Runtime net module (L4/L6 reference implementation) ---
-pymergetic_add_extension(_internal
+pymergetic_add_extension(common_internal
     src_cpp/pymergetic/common/__cpp__.cpp
-    src_cpp/pymergetic/common/base/__init__.cpp
-    src_cpp/pymergetic/common/codec/__init__.cpp
-    src_cpp/pymergetic/common/exceptions/__init__.cpp
-    src_cpp/pymergetic/common/header/__init__.cpp
-    src_cpp/pymergetic/common/nb/__init__.cpp
-    src_cpp/pymergetic/common/net/__init__.cpp
-    src_cpp/pymergetic/common/objects/__init__.cpp
-    src_cpp/pymergetic/common/runtime/__init__.cpp
-    src_cpp/pymergetic/common/session/__init__.cpp
 )
-target_link_libraries(_internal PRIVATE easybind::easybind)
-set_target_properties(_internal PROPERTIES OUTPUT_NAME "__cpp__")
+target_link_libraries(common_internal PRIVATE easybind::easybind)
+target_compile_definitions(common_internal PRIVATE
+    EASYBIND_BUILD_VERSION="${_common_build_version}"
+)
+set_target_properties(common_internal PROPERTIES
+    OUTPUT_NAME "__cpp__"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pymergetic/common"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pymergetic/common"
+)
+if(APPLE)
+    set_target_properties(common_internal PROPERTIES
+        BUILD_RPATH "@loader_path/..;@loader_path/../..;@loader_path/../../easybind"
+        INSTALL_RPATH "@loader_path/..;@loader_path/../..;@loader_path/../../easybind"
+    )
+else()
+    set_target_properties(common_internal PROPERTIES
+        BUILD_RPATH "$ORIGIN/..;$ORIGIN/../..;$ORIGIN/../../easybind"
+        INSTALL_RPATH "$ORIGIN/..;$ORIGIN/../..;$ORIGIN/../../easybind"
+    )
+endif()
 
 # --- 3) Install headers + export CMake package ---
 # Install C++ headers (mirrors the `pymergetic/...` include prefix)
@@ -62,13 +98,13 @@ install(TARGETS pymergetic_common_interface
     EXPORT PymergeticCommonTargets
 )
 
-install(TARGETS _test_internal
-    LIBRARY DESTINATION pymergetic/common
-    RUNTIME DESTINATION pymergetic/common
-    ARCHIVE DESTINATION pymergetic/common
+install(TARGETS common_sysinfo_internal
+    LIBRARY DESTINATION pymergetic/common/sysinfo
+    RUNTIME DESTINATION pymergetic/common/sysinfo
+    ARCHIVE DESTINATION pymergetic/common/sysinfo
 )
 
-install(TARGETS _internal
+install(TARGETS common_internal
     LIBRARY DESTINATION pymergetic/common
     RUNTIME DESTINATION pymergetic/common
     ARCHIVE DESTINATION pymergetic/common

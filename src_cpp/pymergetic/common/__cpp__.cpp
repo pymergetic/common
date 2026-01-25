@@ -1,0 +1,9 @@
+#include <pymergetic/easybind/prelude.hpp>
+
+EASYBIND_MODULE("pymergetic.common");
+
+namespace pymergetic::common {
+
+EASYBIND_REGISTER_ATTR_PACKAGE("__version__", EASYBIND_BUILD_VERSION);
+
+}  // namespace pymergetic::common
