@@ -12,8 +12,8 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from pymergetic.common.devtools.pins_config import resolve_bump_distributions
 from pymergetic.common.devtools.project_paths import (
-    resolve_pin_distribution,
     resolve_project_root,
     resolve_pyproject,
 )
@@ -113,6 +113,35 @@ def pypi_release_exists(package: str, version: str, *, timeout_s: float = 15.0) 
         raise
 
 
+def newest_pypi_release_for_compatible_pin(
+    distribution: str,
+    pin_version: str,
+    *,
+    timeout_s: float = 30.0,
+) -> str | None:
+    """Return the newest PyPI release matching ``~={pin_version}``, or None if none yet."""
+    from packaging.specifiers import SpecifierSet
+    from packaging.version import InvalidVersion, Version
+
+    spec = SpecifierSet(f"~={pin_version}")
+    data = fetch_pypi_project_json(distribution, timeout_s=timeout_s)
+    releases = data.get("releases") or {}
+    best: Version | None = None
+    for ver_str, files in releases.items():
+        if not files:
+            continue
+        try:
+            ver = Version(ver_str)
+        except InvalidVersion:
+            continue
+        if ver.is_prerelease or ver.is_devrelease:
+            continue
+        if spec.contains(ver):
+            if best is None or ver > best:
+                best = ver
+    return str(best) if best is not None else None
+
+
 def compatible_pin_versions(pyproject_toml: str, distribution: str) -> list[str]:
     """Return every version string from ``{distribution}~=VERSION`` pins (order preserved)."""
     pat = _pin_pattern(distribution)
@@ -147,16 +176,16 @@ def wait_pypi_for_compatible_pin(
     interval_s: float = 30.0,
     verbose: bool = False,
 ) -> tuple[str, int]:
-    """Poll PyPI until ``pypi_release_exists(distribution, version)`` for the pin.
+    """Poll PyPI until some release satisfies the ``~={pin}`` compatible-release pins.
 
-    Uses ``single_compatible_pin_version`` on *pyproject_toml*. Returns
-    ``(resolved_version, attempt_count)``. Raises ``TimeoutError`` if the release
-    never appears within *timeout_s*. With *verbose*, log progress to stdout.
+    Uses ``single_compatible_pin_version`` on *pyproject_toml* for the pin RHS, then waits
+    for the **newest matching release** on PyPI (not the literal pin string only).
+    Returns ``(resolved_version, attempt_count)``.
     """
-    version = single_compatible_pin_version(pyproject_toml, distribution)
+    pin_version = single_compatible_pin_version(pyproject_toml, distribution)
     if verbose:
         print(
-            f"waiting for {distribution}=={version} on PyPI "
+            f"waiting for {distribution}~={pin_version} on PyPI "
             f"(timeout {timeout_s:.0f}s, interval {interval_s:.0f}s)...",
             flush=True,
         )
@@ -164,11 +193,17 @@ def wait_pypi_for_compatible_pin(
     attempt = 0
     while True:
         attempt += 1
-        if pypi_release_exists(distribution, version):
-            return version, attempt
+        resolved = newest_pypi_release_for_compatible_pin(distribution, pin_version)
+        if resolved is not None:
+            if verbose and resolved != pin_version:
+                print(
+                    f"note: {distribution}~={pin_version} satisfied by {resolved} on PyPI",
+                    flush=True,
+                )
+            return resolved, attempt
         if time.monotonic() >= deadline:
             raise TimeoutError(
-                f"timed out waiting for {distribution}=={version} on PyPI "
+                f"timed out waiting for {distribution}~={pin_version} on PyPI "
                 f"after {timeout_s}s ({attempt} attempts)"
             )
         if verbose:
@@ -353,8 +388,8 @@ def main(argv: list[str] | None = None) -> int:
             "The GitHub tags API can lag briefly after a new tag push. "
             "Use --from-pypi for PyPI's published latest instead. "
             "--version / --installed are explicit overrides.\n\n"
-            "``--distribution`` is optional when the project has exactly one external "
-            "compatible-release pin (not ``[project].name``)."
+            "Targets come from ``[tool.pymergetic.pins]`` (``bump = true``, default) or a sole "
+            "external ``~=`` pin. Use ``--distribution`` to override."
         )
     )
     ap.add_argument(
@@ -368,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
         "-d",
         default=None,
         metavar="NAME",
-        help="PyPI distribution whose ~= pins to bump (default: infer from pyproject.toml)",
+        help="PyPI distribution whose ~= pins to bump (default: [tool.pymergetic.pins] or infer)",
     )
     ap.add_argument(
         "--pyproject",
@@ -435,76 +470,79 @@ def main(argv: list[str] | None = None) -> int:
 
     text = pyproject.read_text(encoding="utf-8")
     try:
-        dist = resolve_pin_distribution(text, pyproject.parent, ns.distribution)
+        dists = resolve_bump_distributions(text, pyproject.parent, ns.distribution)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    ver_source: str
-    if ns.installed:
-        raw_installed = installed_distribution_version(dist)
-        try:
-            ver = compatible_release_pin_from_installed_version(raw_installed)
-        except ValueError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 1
-        if raw_installed != ver:
-            print(
-                f"note: installed {dist}=={raw_installed!r} -> pin ~={ver} (PEP 440 release triple)",
-                file=sys.stderr,
-            )
-        ver_source = "installed"
-    elif ns.from_pypi:
-        try:
-            ver = fetch_pypi_version(dist)
-        except ValueError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 1
-        ver_source = "pypi"
-    elif ns.version is not None:
-        ver = ns.version.strip()
-        ver_source = "explicit"
-    else:
-        # Default and --from-github [OWNER/REPO]: latest v* tag on GitHub.
-        raw = ns.from_github.strip() if ns.from_github is not None else ""
-        try:
-            if not raw:
-                owner_repo = github_owner_repo_from_pypi_distribution(dist)
-            else:
-                owner_repo = raw
-            ver = latest_release_version_from_github(owner_repo)
-        except ValueError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 1
-        ver_source = "github"
-
-    if not _VERSION_RE.match(ver):
-        print(f"error: bad version string: {ver!r}", file=sys.stderr)
-        return 2
-
-    try:
-        n = bump_compatible_pins_in_file(pyproject, dist, ver, dry_run=ns.dry_run)
-    except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
-
-    action = "would update" if ns.dry_run else "updated"
-    print(f"{action} {n} {dist}~= pin(s) to ~={ver} in {pyproject}")
-
-    # PyPI / venv often lag a v* tag on GitHub (default pin source is GitHub).
-    if ns.dry_run and ver_source in ("pypi", "installed"):
-        try:
-            or_ = github_owner_repo_from_pypi_distribution(dist)
-            gh_ver = latest_release_version_from_github(or_)
-            if _semver_tuple(gh_ver) > _semver_tuple(ver):
+    exit_code = 0
+    for dist in dists:
+        ver_source: str
+        if ns.installed:
+            raw_installed = installed_distribution_version(dist)
+            try:
+                ver = compatible_release_pin_from_installed_version(raw_installed)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            if raw_installed != ver:
                 print(
-                    f"hint: github.com/{or_} has v{gh_ver} but {ver_source} gave {ver}. "
-                    f"Default pinning follows GitHub tags; run: pymergetic-pin-pyproject --project-root {pyproject.parent} --dry-run",
+                    f"note: installed {dist}=={raw_installed!r} -> pin ~={ver} (PEP 440 release triple)",
+                    file=sys.stderr,
                 )
-        except ValueError:
-            pass
+            ver_source = "installed"
+        elif ns.from_pypi:
+            try:
+                ver = fetch_pypi_version(dist)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            ver_source = "pypi"
+        elif ns.version is not None:
+            ver = ns.version.strip()
+            ver_source = "explicit"
+        else:
+            raw = ns.from_github.strip() if ns.from_github is not None else ""
+            try:
+                if not raw:
+                    owner_repo = github_owner_repo_from_pypi_distribution(dist)
+                else:
+                    owner_repo = raw
+                ver = latest_release_version_from_github(owner_repo)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            ver_source = "github"
 
-    return 0
+        if not _VERSION_RE.match(ver):
+            print(f"error: bad version string: {ver!r}", file=sys.stderr)
+            return 2
+
+        try:
+            n = bump_compatible_pins_in_file(pyproject, dist, ver, dry_run=ns.dry_run)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+
+        action = "would update" if ns.dry_run else "updated"
+        print(f"{action} {n} {dist}~= pin(s) to ~={ver} in {pyproject}")
+
+        if ns.dry_run and ver_source in ("pypi", "installed"):
+            try:
+                or_ = github_owner_repo_from_pypi_distribution(dist)
+                gh_ver = latest_release_version_from_github(or_)
+                if _semver_tuple(gh_ver) > _semver_tuple(ver):
+                    print(
+                        f"hint: github.com/{or_} has v{gh_ver} but {ver_source} gave {ver}. "
+                        f"Default pinning follows GitHub tags; run: pymergetic-pin-pyproject "
+                        f"--project-root {pyproject.parent} --dry-run",
+                    )
+            except ValueError:
+                pass
+
+        text = pyproject.read_text(encoding="utf-8")
+
+    return exit_code
 
 
 if __name__ == "__main__":

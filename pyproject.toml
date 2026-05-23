@@ -81,6 +81,10 @@ dev = [
   "pymergetic-common[all]",
 ]
 
+[tool.pymergetic.pins]
+nanobind = {}
+pymergetic-easybind = {}
+
 [project.urls]
 Homepage = "https://github.com/pymergetic/common"
 Repository = "https://github.com/pymergetic/common"
@@ -88,6 +92,7 @@ Issues = "https://github.com/pymergetic/common/issues"
 
 [project.scripts]
 pymergetic-pin-pyproject = "pymergetic.common.devtools.pin_pyproject:main"
+pymergetic-pin-specs = "pymergetic.common.devtools.pin_specs:main"
 pymergetic-release-tag = "pymergetic.common.devtools.release_tag:main"
 pymergetic-wait-pypi = "pymergetic.common.devtools.wait_pypi:main"
 

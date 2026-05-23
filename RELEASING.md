@@ -59,14 +59,26 @@ Re-runs for the same tag use **`skip-existing: true`** so duplicate uploads do n
 | CLI | `--distribution` |
 |-----|------------------|
 | `pymergetic-release-tag` | not used — reads `[project].name` |
-| `pymergetic-pin-pyproject` | optional — inferred when there is one external `~=` pin |
-| `pymergetic-wait-pypi` | optional — inferred when there is one external `~=` pin |
+| `pymergetic-pin-pyproject` | optional — uses `[tool.pymergetic.pins]` or infers |
+| `pymergetic-wait-pypi` | optional — uses `[tool.pymergetic.pins]` `wait = true` |
+| `pymergetic-pin-specs` | optional — prints/installs pin specs for CI hooks |
+
+Declare targets once in **`pyproject.toml`**:
+
+```toml
+[tool.pymergetic.pins]
+pymergetic-common = { wait = true }   # consumer: wait before publish; bump on pin
+nanobind = {}                         # pin factory: bump all listed keys
+pymergetic-easybind = {}
+```
+
+Keep **one** ``distribution[extra]~=X.Y.Z`` line per pinned upstream (usually **`[build-system] requires`**). Devtools update that line; they do not duplicate the version elsewhere.
 
 ```bash
-pymergetic-pin-pyproject --project-root packages/cppdantic --dry-run
-pymergetic-pin-pyproject --project-root packages/common -d pymergetic-easybind --dry-run
-pymergetic-release-tag --project-root packages/common --dry-run
+pymergetic-pin-pyproject --project-root packages/easybind
+pymergetic-pin-pyproject --project-root packages/common
 pymergetic-wait-pypi --project-root packages/easybind
+pymergetic-release-tag --project-root packages/common --dry-run
 ```
 
 **Python API:**

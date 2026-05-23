@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
+from pymergetic.common.devtools.pins_config import compatible_pin_base_distributions
 from pymergetic.common.devtools.release_helpers import project_name_from_pyproject
-
-_COMPAT_PIN_BASE_RE = re.compile(
-    r"([a-zA-Z0-9][a-zA-Z0-9._-]*)(?:\[[^\]]+\])?~=([0-9]+(?:\.[0-9]+)*)"
-)
 
 
 def resolve_project_root(path: Path | str | None = None) -> Path:
@@ -57,40 +53,14 @@ def project_distribution(project_root: Path) -> str:
     return project_name_from_pyproject(project_root)
 
 
-def compatible_pin_base_distributions(pyproject_toml: str) -> list[str]:
-    """Base PyPI names from every ``NAME`` or ``NAME[extra]`` compatible-release pin."""
-    return [m.group(1) for m in _COMPAT_PIN_BASE_RE.finditer(pyproject_toml)]
-
-
 def resolve_pin_distribution(
     pyproject_toml: str,
     project_root: Path,
     explicit: str | None,
 ) -> str:
-    """Distribution whose ``~=`` pins to read or update.
+    from pymergetic.common.devtools.pins_config import resolve_bump_distributions
 
-    Uses *explicit* when set; otherwise the sole pin target that is not ``[project].name``.
-    """
-    if explicit is not None:
-        dist = explicit.strip()
-        if not dist:
-            raise ValueError("empty --distribution")
-        return dist
-
-    project_name = project_name_from_pyproject(project_root)
-    bases = compatible_pin_base_distributions(pyproject_toml)
-    external = sorted({b for b in bases if b != project_name})
-    if len(external) == 1:
-        return external[0]
-    if not external:
-        raise ValueError(
-            f"no external `{{name}}~=…` pins in {pyproject_path(project_root)}; "
-            "pass --distribution explicitly"
-        )
-    raise ValueError(
-        f"multiple pin targets {external!r} in {pyproject_path(project_root)}; "
-        "pass --distribution explicitly"
-    )
+    return resolve_bump_distributions(pyproject_toml, project_root, explicit)[0]
 
 
 def resolve_wait_distribution(
@@ -98,5 +68,18 @@ def resolve_wait_distribution(
     project_root: Path,
     explicit: str | None,
 ) -> str:
-    """PyPI distribution to poll before publish (same rules as :func:`resolve_pin_distribution`)."""
-    return resolve_pin_distribution(pyproject_toml, project_root, explicit)
+    from pymergetic.common.devtools.pins_config import resolve_wait_distributions
+
+    return resolve_wait_distributions(pyproject_toml, project_root, explicit)[0]
+
+
+__all__ = [
+    "compatible_pin_base_distributions",
+    "find_git_root",
+    "project_distribution",
+    "pyproject_path",
+    "resolve_pin_distribution",
+    "resolve_project_root",
+    "resolve_pyproject",
+    "resolve_wait_distribution",
+]
