@@ -95,6 +95,7 @@ pymergetic-pin-pyproject = "pymergetic.common.devtools.pin_pyproject:main"
 pymergetic-pin-specs = "pymergetic.common.devtools.pin_specs:main"
 pymergetic-release-tag = "pymergetic.common.devtools.release_tag:main"
 pymergetic-wait-pypi = "pymergetic.common.devtools.wait_pypi:main"
+pymergetic-repair-wheel = "pymergetic.common.devtools.repair_wheel:main"
 
 [tool.setuptools.packages.find]
 where = ["src_py"]
