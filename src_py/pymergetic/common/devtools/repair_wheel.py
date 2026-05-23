@@ -25,9 +25,20 @@ def _easybind_consumer_spec(project_root: Path) -> str:
 
 
 def _easybind_pkg_dir() -> Path:
-    import pymergetic.easybind as eb
+    """Install dir of pymergetic.easybind (no import — Windows .pyd fails until DLLs are on PATH)."""
+    from importlib.metadata import PackageNotFoundError, distribution
 
-    return Path(eb.__file__).resolve().parent
+    try:
+        dist = distribution(EASYBIND_DIST)
+    except PackageNotFoundError as e:
+        raise RuntimeError(f"{EASYBIND_DIST} is not installed") from e
+
+    for f in dist.files or []:
+        parts = f.parts
+        if len(parts) >= 2 and parts[0] == "pymergetic" and parts[1] == "easybind":
+            return Path(dist.locate_file(f)).resolve().parent
+
+    raise RuntimeError(f"pymergetic/easybind not found in {EASYBIND_DIST} installation")
 
 
 def _install(*specs: str) -> None:
