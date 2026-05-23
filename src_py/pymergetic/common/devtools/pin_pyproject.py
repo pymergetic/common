@@ -49,7 +49,7 @@ def _pin_pattern(distribution: str) -> re.Pattern[str]:
     if not _DIST_OK.match(distribution):
         raise ValueError(
             f"invalid distribution name for pin replacement: {distribution!r} "
-            "(expected a PyPI-style name, e.g. pymergetic-easybind, cppdantic, scikit-build-core)"
+            "(expected a PyPI-style name, e.g. pymergetic-easybind, pymergetic-cppdantic, scikit-build-core)"
         )
     base = re.escape(distribution)
     return re.compile(rf"({base}(?:\[[^\]]+\])?~=)([0-9]+(?:\.[0-9]+)*)")

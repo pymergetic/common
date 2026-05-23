@@ -98,7 +98,7 @@ from pymergetic.common.devtools import (
 
 1. **common** — tag `vA.B.C`, wait for PyPI.
 2. **easybind** — bump `pymergetic-common` / `nanobind` pins in common if needed; release easybind; consumers bump `pymergetic-easybind~=…`.
-3. **Hybrid packages** (cppdantic, synapse, …) — bump pins, tag, publish.
+3. **Hybrid packages** (pymergetic-cppdantic, synapse, …) — bump pins, tag, publish.
 
 ## Submodule / os-sdk note
 

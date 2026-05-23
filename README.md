@@ -35,7 +35,7 @@ Other packages should **re-export** these groups instead of duplicating pins, e.
 dev = ["pymergetic-common[dev]"]
 ```
 
-C++ extension packages (cppdantic, synapse, axon): use `pymergetic-common[easybind]`.
+C++ extension packages (pymergetic-cppdantic, synapse, axon): use `pymergetic-common[easybind]`.
 
 ## os-sdk workspace install
 
