@@ -16,6 +16,7 @@ Install with `pip install pymergetic-common[GROUP]` or `uv pip install -e "packa
 | Extra | Purpose |
 |-------|---------|
 | `config` | pydantic, pydantic-settings, pyyaml (included in base install) |
+| `api` | fastapi, httpx (HTTP API smoke tests) |
 | `console` | fire, rich, textual |
 | `objects` | pyzmq |
 | `pki` | cryptography |

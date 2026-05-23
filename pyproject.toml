@@ -38,6 +38,10 @@ config = [
   "pydantic-settings>=2.0.0",
   "pyyaml>=6.0",
 ]
+api = [
+  "fastapi>=0.100",
+  "httpx",
+]
 objects = [
   "pyzmq>=25.0.0",
 ]
