@@ -62,14 +62,14 @@ uv pip install -e "packages/common[dev]"
 Versioning, tagging, and PyPI CI mirror **pymergetic-easybind**. See **[RELEASING.md](RELEASING.md)**.
 
 ```bash
-pymergetic-release-tag --dry-run
-pymergetic-release-tag
+pymergetic-release-tag --project-root packages/common --dry-run
+pymergetic-release-tag --project-root packages/common
 ```
 
-Dev CLIs (after `pip install -e .`, os-sdk `uv sync`, or PyPI **`pymergetic-common`**):
+Dev CLIs (install **`pymergetic-common[release]`** from PyPI, or `uv sync` in os-sdk). Use **`--project-root`** when not cd'd into the package repo:
 
-- **`pymergetic-release-tag`** — next `v*` tag + push (any package repo)
-- **`pymergetic-pin-pyproject`** — bump `{distribution}~=…` pins (`--distribution` for easybind, cppdantic, …)
+- **`pymergetic-release-tag`** — next `v*` tag + push
+- **`pymergetic-pin-pyproject`** — bump `{distribution}~=…` pins
 - **`pymergetic-wait-pypi`** — poll until a pinned release is on PyPI
 
 Implementation: **`pymergetic.common.devtools`**. See **[RELEASING.md](RELEASING.md)**.

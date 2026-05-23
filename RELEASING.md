@@ -25,13 +25,18 @@ twine upload dist/*
 **`pymergetic-release-tag`** (after `pip install -e .` or `uv sync` in os-sdk) bumps the latest **`v*`** tag (patch by default), optionally commits a sole dirty **`pyproject.toml`**, and pushes branch + tag.
 
 ```bash
+# from the package repo, or pass --project-root (relative or absolute)
 pymergetic-release-tag --dry-run
 pymergetic-release-tag
-pymergetic-release-tag --minor
-pymergetic-release-tag --major
+
+# from os-sdk (or any parent directory)
+pymergetic-release-tag --project-root packages/common --dry-run
+pymergetic-release-tag --project-root packages/easybind --minor
 ```
 
-Run from the **common** repo root. Without install:
+``[project].name`` is read from ``pyproject.toml`` under ``--project-root``. Git commands run in the git root at or above that directory.
+
+Without install:
 
 ```bash
 PYTHONPATH=src_py python -m pymergetic.common.devtools.release_tag --dry-run
@@ -49,22 +54,20 @@ Re-runs for the same tag use **`skip-existing: true`** so duplicate uploads do n
 
 **Canonical implementation:** `pymergetic.common.devtools` in **pymergetic-common**. Install **`pymergetic-common`** (or **`pymergetic-easybind`**, which depends on it).
 
-**CLIs** — run from any package repo that has a `pyproject.toml`:
+**CLIs** — pass **`--project-root PATH`** when not in the package directory (relative or absolute). Install **`pymergetic-common[release]`** from PyPI for standalone use (no monorepo required).
 
-| CLI | Default `--distribution` |
-|-----|--------------------------|
-| `pymergetic-pin-pyproject` | `pymergetic-common` |
-| `pymergetic-release-tag` | (reads `[project].name` from cwd) |
-| `pymergetic-wait-pypi` | `pymergetic-common` |
+| CLI | `--distribution` |
+|-----|------------------|
+| `pymergetic-release-tag` | not used — reads `[project].name` |
+| `pymergetic-pin-pyproject` | optional — inferred when there is one external `~=` pin |
+| `pymergetic-wait-pypi` | optional — inferred when there is one external `~=` pin |
 
 ```bash
-pymergetic-pin-pyproject --distribution pymergetic-easybind --dry-run
-pymergetic-pin-pyproject --distribution cppdantic --dry-run
-pymergetic-release-tag --dry-run
-pymergetic-wait-pypi --distribution pymergetic-easybind
+pymergetic-pin-pyproject --project-root packages/cppdantic --dry-run
+pymergetic-pin-pyproject --project-root packages/common -d pymergetic-easybind --dry-run
+pymergetic-release-tag --project-root packages/common --dry-run
+pymergetic-wait-pypi --project-root packages/easybind
 ```
-
-Pass **`--distribution NAME`** for any PyPI project. Use **`--from-github pymergetic/common`** before the first PyPI upload of a new package.
 
 **Python API:**
 

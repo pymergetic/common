@@ -12,6 +12,12 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from pymergetic.common.devtools.project_paths import (
+    resolve_pin_distribution,
+    resolve_project_root,
+    resolve_pyproject,
+)
+
 # PEP 440 version suitable for ``~=`` RHS in typical pyproject pins (numeric release).
 _VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)*$")
 
@@ -39,7 +45,8 @@ def _pin_pattern(distribution: str) -> re.Pattern[str]:
             f"invalid distribution name for pin replacement: {distribution!r} "
             "(expected a PyPI-style name, e.g. pymergetic-easybind, cppdantic, scikit-build-core)"
         )
-    return re.compile(rf"({re.escape(distribution)}~=)([0-9]+(?:\.[0-9]+)*)")
+    base = re.escape(distribution)
+    return re.compile(rf"({base}(?:\[[^\]]+\])?~=)([0-9]+(?:\.[0-9]+)*)")
 
 
 def fetch_pypi_project_json(distribution: str, *, timeout_s: float = 30.0) -> dict:
@@ -336,31 +343,38 @@ def bump_easybind_compatible_pins_in_file(
     return bump_compatible_pins_in_file(pyproject, "pymergetic-easybind", version, dry_run=dry_run)
 
 
-def main(argv: list[str] | None = None, *, default_distribution: str = "pymergetic-common") -> int:
+def main(argv: list[str] | None = None) -> int:
     """CLI: ``pymergetic-pin-pyproject`` (see ``--help``)."""
     ap = argparse.ArgumentParser(
         description=(
-            f"Set every {{distribution}}~= pin in pyproject.toml "
-            f"(default distribution: {default_distribution}). "
+            "Set every {distribution}~= pin in pyproject.toml. "
             "Default version is the highest vX.Y.Z tag on GitHub for that distribution's repo "
             "(github.com/OWNER/REPO is read from PyPI project URLs; override with --from-github ORG/REPO). "
             "The GitHub tags API can lag briefly after a new tag push. "
             "Use --from-pypi for PyPI's published latest instead. "
-            "--version / --installed are explicit overrides."
+            "--version / --installed are explicit overrides.\n\n"
+            "``--distribution`` is optional when the project has exactly one external "
+            "compatible-release pin (not ``[project].name``)."
         )
+    )
+    ap.add_argument(
+        "--project-root",
+        type=Path,
+        default=None,
+        help="package directory containing pyproject.toml (relative or absolute; default: cwd)",
     )
     ap.add_argument(
         "--distribution",
         "-d",
-        default=default_distribution,
+        default=None,
         metavar="NAME",
-        help=f"PyPI distribution name to match in pins (default: {default_distribution})",
+        help="PyPI distribution whose ~= pins to bump (default: infer from pyproject.toml)",
     )
     ap.add_argument(
         "--pyproject",
         type=Path,
         default=None,
-        help="path to pyproject.toml (default: ./pyproject.toml under cwd)",
+        help="path to pyproject.toml or its parent directory (overrides --project-root)",
     )
     ap.add_argument(
         "--version",
@@ -414,14 +428,16 @@ def main(argv: list[str] | None = None, *, default_distribution: str = "pymerget
         )
         return 2
 
-    pyproject = ns.pyproject if ns.pyproject is not None else Path.cwd() / "pyproject.toml"
+    pyproject = resolve_pyproject(project_root=resolve_project_root(ns.project_root), pyproject=ns.pyproject)
     if not pyproject.is_file():
         print(f"error: {pyproject} not found", file=sys.stderr)
         return 2
 
-    dist = ns.distribution.strip()
-    if not dist:
-        print("error: empty --distribution", file=sys.stderr)
+    text = pyproject.read_text(encoding="utf-8")
+    try:
+        dist = resolve_pin_distribution(text, pyproject.parent, ns.distribution)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
         return 2
 
     ver_source: str
@@ -483,7 +499,7 @@ def main(argv: list[str] | None = None, *, default_distribution: str = "pymerget
             if _semver_tuple(gh_ver) > _semver_tuple(ver):
                 print(
                     f"hint: github.com/{or_} has v{gh_ver} but {ver_source} gave {ver}. "
-                    "Default pinning follows GitHub tags; run: pymergetic-pin-pyproject --dry-run",
+                    f"Default pinning follows GitHub tags; run: pymergetic-pin-pyproject --project-root {pyproject.parent} --dry-run",
                 )
         except ValueError:
             pass

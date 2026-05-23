@@ -1,4 +1,4 @@
-"""Next semver ``v*`` tag and ``git fetch`` / ``tag`` / ``push`` (common repository)."""
+"""Next semver ``v*`` tag and ``git fetch`` / ``tag`` / ``push``."""
 
 from __future__ import annotations
 
@@ -7,30 +7,32 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pymergetic.common.devtools.project_paths import (
+    find_git_root,
+    project_distribution,
+    resolve_project_root,
+)
 from pymergetic.common.devtools.release_helpers import (
     PYPROJECT_AUTO_COMMIT_MSG,
     dirty_paths,
     ensure_clean_worktree,
     next_v_tag,
     prepare_worktree_for_tag,
-    project_name_from_pyproject,
     tag_push_commands,
 )
 
 
 def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
-    """Entry point for ``pymergetic-release-tag``.
-
-    *repo* defaults to the current working directory (run from the repository root).
-    """
+    """Entry point for ``pymergetic-release-tag``."""
     ap = argparse.ArgumentParser(
         description=(
-            "Create and push the next pymergetic-common release tag from the latest ``v*`` git tag.\n\n"
+            "Create and push the next release tag from the latest ``v*`` git tag.\n\n"
             "Default: bump **patch**. Use ``--minor`` / ``--major`` for other segments.\n"
             "If there is no ``v*`` tag yet, starts from **v0.0.0**, then bumps.\n\n"
+            "``[project].name`` is read from ``pyproject.toml`` under ``--project-root``.\n"
+            "Git operations run in the git root found at or above that directory.\n\n"
             "If **only** ``pyproject.toml`` is uncommitted, it is committed and pushed to the "
             "branch before tagging (omit ``--no-auto-commit`` to enable).\n\n"
-            "The annotated tag message uses ``[project].name`` from ``pyproject.toml`` plus the version.\n\n"
             "**GitHub vs PyPI:** the tag appears immediately; PyPI upload can still fail."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -45,11 +47,18 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
     ap.add_argument("--no-push", action="store_true", help="tag locally only; do not push")
     ap.add_argument("--remote", default="origin", help="git remote (default: origin)")
     ap.add_argument("--branch", default="main", help="branch to update (default: main)")
-    ap.add_argument(
+    root_arg = ap.add_mutually_exclusive_group()
+    root_arg.add_argument(
+        "--project-root",
+        type=Path,
+        default=None,
+        help="package directory containing pyproject.toml (relative or absolute; default: cwd)",
+    )
+    root_arg.add_argument(
         "--repo",
         type=Path,
         default=None,
-        help="git repository root (default: current working directory)",
+        help=argparse.SUPPRESS,
     )
     ap.add_argument(
         "--no-auto-commit",
@@ -58,21 +67,24 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
     )
     ns = ap.parse_args(argv)
 
-    root = repo if repo is not None else ns.repo
-    if root is None:
-        root = Path.cwd()
-    root = root.resolve()
-    if not (root / ".git").exists() and not (root / ".git").is_file():
-        print(f"error: no git state at {root}", file=sys.stderr)
-        return 2
+    if repo is not None:
+        project_root = repo.resolve()
+    else:
+        project_root = resolve_project_root(ns.project_root or ns.repo)
 
     try:
-        dist_name = project_name_from_pyproject(root)
+        git_root = find_git_root(project_root)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    latest, new_tag = next_v_tag(root, level=ns.level)
+    try:
+        dist_name = project_distribution(project_root)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    latest, new_tag = next_v_tag(git_root, level=ns.level)
     msg = f"{dist_name} {new_tag.removeprefix('v')}"
     cmds = tag_push_commands(
         new_tag,
@@ -83,10 +95,13 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
         tag_message=msg,
     )
 
+    print(f"project:    {project_root}")
+    print(f"git root:   {git_root}")
+    print(f"distribution: {dist_name}")
     print(f"latest tag: {latest or '(none)'}")
     print(f"next tag:   {new_tag}  (bump {ns.level})")
 
-    paths = dirty_paths(root)
+    paths = dirty_paths(git_root)
     auto = not ns.no_auto_commit
     if paths:
         if paths == {"pyproject.toml"} and not auto:
@@ -116,15 +131,15 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
         return 0
 
     prepare_worktree_for_tag(
-        root,
+        git_root,
         auto_commit_pyproject=auto,
         remote=ns.remote,
         branch=ns.branch,
         push_after_commit=not ns.no_push,
     )
-    ensure_clean_worktree(root)
+    ensure_clean_worktree(git_root)
     for c in cmds:
-        subprocess.run(c, cwd=root, check=True)
+        subprocess.run(c, cwd=git_root, check=True)
 
     if ns.no_push:
         print(f"done: created {new_tag} locally (not pushed)")
