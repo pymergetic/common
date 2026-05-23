@@ -6,13 +6,19 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from pymergetic.common.devtools.pins_config import resolve_bump_distributions
+from pymergetic.common.devtools.pins_config import (
+    compatible_pin_specs,
+    distribution_waits_on_pypi,
+    resolve_bump_distributions,
+    single_compatible_pin_spec,
+)
 from pymergetic.common.devtools.project_paths import (
     resolve_project_root,
     resolve_pyproject,
@@ -168,6 +174,24 @@ def single_compatible_pin_version(
     return vers[0]
 
 
+def pip_install_dry_run_ok(requirement: str) -> bool:
+    """Return whether ``pip install --dry-run`` can resolve *requirement* right now."""
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--ignore-installed",
+            requirement,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode == 0
+
+
 def wait_pypi_for_compatible_pin(
     pyproject_toml: str,
     distribution: str,
@@ -176,16 +200,14 @@ def wait_pypi_for_compatible_pin(
     interval_s: float = 30.0,
     verbose: bool = False,
 ) -> tuple[str, int]:
-    """Poll PyPI until some release satisfies the ``~={pin}`` compatible-release pins.
-
-    Uses ``single_compatible_pin_version`` on *pyproject_toml* for the pin RHS, then waits
-    for the **newest matching release** on PyPI (not the literal pin string only).
-    Returns ``(resolved_version, attempt_count)``.
-    """
+    """Poll until the pinned ``~={version}`` is on PyPI **and** pip can resolve it."""
     pin_version = single_compatible_pin_version(pyproject_toml, distribution)
+    specs = compatible_pin_specs(pyproject_toml, distribution)
+    if not specs:
+        specs = [f"{distribution}~={pin_version}"]
     if verbose:
         print(
-            f"waiting for {distribution}~={pin_version} on PyPI "
+            f"waiting for {', '.join(specs)} to be installable from PyPI "
             f"(timeout {timeout_s:.0f}s, interval {interval_s:.0f}s)...",
             flush=True,
         )
@@ -193,23 +215,21 @@ def wait_pypi_for_compatible_pin(
     attempt = 0
     while True:
         attempt += 1
-        resolved = newest_pypi_release_for_compatible_pin(distribution, pin_version)
-        if resolved is not None:
-            if verbose and resolved != pin_version:
-                print(
-                    f"note: {distribution}~={pin_version} satisfied by {resolved} on PyPI",
-                    flush=True,
-                )
-            return resolved, attempt
+        json_ok = pypi_release_exists(distribution, pin_version)
+        pip_ok = json_ok and all(pip_install_dry_run_ok(spec) for spec in specs)
+        if pip_ok:
+            return pin_version, attempt
         if time.monotonic() >= deadline:
+            state = "JSON only" if json_ok and not pip_ok else "not on PyPI"
             raise TimeoutError(
-                f"timed out waiting for {distribution}~={pin_version} on PyPI "
-                f"after {timeout_s}s ({attempt} attempts)"
+                f"timed out waiting for {distribution}~={pin_version} ({state}; "
+                f"pip must resolve {specs!r}) after {timeout_s}s ({attempt} attempts)"
             )
         if verbose:
             remaining = int(max(0, deadline - time.monotonic()))
+            detail = "json ok, pip index lagging" if json_ok else "not on PyPI yet"
             print(
-                f"attempt {attempt}: not yet (retry in {interval_s:.0f}s, ~{remaining}s left)...",
+                f"attempt {attempt}: {detail} (retry in {interval_s:.0f}s, ~{remaining}s left)...",
                 flush=True,
             )
         time.sleep(interval_s)
@@ -437,10 +457,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="OWNER/REPO",
         help=(
-            "same default as no flag: pin to highest vMAJOR.MINOR.PATCH tag on GitHub. "
+            "pin to highest vMAJOR.MINOR.PATCH tag on GitHub. "
             "If you pass OWNER/REPO, use that repo instead of discovering it from PyPI metadata. "
             "The tags list can lag a few seconds after you push a new tag; re-run if the pin looks stale. "
             "Set GITHUB_TOKEN for private repos."
+        ),
+    )
+    ap.add_argument(
+        "--force-github",
+        action="store_true",
+        help=(
+            "with --from-github / default GitHub pinning: allow bumping to a tag that is not "
+            "on PyPI yet (not recommended for [tool.pymergetic.pins] wait = true targets)"
         ),
     )
     ap.add_argument("--dry-run", action="store_true", help="do not write the file")
@@ -477,6 +505,7 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     for dist in dists:
+        wait_pin = distribution_waits_on_pypi(pyproject.parent, dist)
         ver_source: str
         if ns.installed:
             raw_installed = installed_distribution_version(dist)
@@ -501,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
         elif ns.version is not None:
             ver = ns.version.strip()
             ver_source = "explicit"
-        else:
+        elif ns.from_github is not None:
             raw = ns.from_github.strip() if ns.from_github is not None else ""
             try:
                 if not raw:
@@ -513,6 +542,39 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: {e}", file=sys.stderr)
                 return 1
             ver_source = "github"
+        elif wait_pin:
+            try:
+                ver = fetch_pypi_version(dist)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            ver_source = "pypi"
+        else:
+            try:
+                owner_repo = github_owner_repo_from_pypi_distribution(dist)
+                ver = latest_release_version_from_github(owner_repo)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            ver_source = "github"
+
+        if ver_source == "github" and wait_pin and not ns.force_github:
+            if not pypi_release_exists(dist, ver):
+                print(
+                    f"error: {dist}=={ver} is tagged on GitHub but not on PyPI yet.\n"
+                    "Wait for the upstream publish workflow, then re-run (default for wait = true "
+                    "pins is --from-pypi), or pass --force-github to pin ahead of PyPI.",
+                    file=sys.stderr,
+                )
+                return 1
+            specs_probe = [f"{dist}~={ver}"]
+            if not pip_install_dry_run_ok(specs_probe[0]):
+                print(
+                    f"error: {dist}=={ver} is on PyPI JSON but pip cannot resolve {specs_probe[0]!r} yet.\n"
+                    "Retry in a minute or use --from-pypi after the index catches up.",
+                    file=sys.stderr,
+                )
+                return 1
 
         if not _VERSION_RE.match(ver):
             print(f"error: bad version string: {ver!r}", file=sys.stderr)
@@ -534,11 +596,16 @@ def main(argv: list[str] | None = None) -> int:
                 if _semver_tuple(gh_ver) > _semver_tuple(ver):
                     print(
                         f"hint: github.com/{or_} has v{gh_ver} but {ver_source} gave {ver}. "
-                        f"Default pinning follows GitHub tags; run: pymergetic-pin-pyproject "
-                        f"--project-root {pyproject.parent} --dry-run",
+                        f"For wait = true pins the default is PyPI; use --from-github to follow tags.",
                     )
             except ValueError:
                 pass
+        elif ns.dry_run and ver_source == "github" and wait_pin:
+            print(
+                f"note: {dist} has wait = true; default bump source is PyPI (--from-pypi). "
+                "GitHub was used because --from-github was set explicitly.",
+                file=sys.stderr,
+            )
 
         text = pyproject.read_text(encoding="utf-8")
 

@@ -63,6 +63,16 @@ def _pin_flag(cfg: dict, key: str, *, default: bool) -> bool:
     return bool(value)
 
 
+def pin_entry(project_root: Path, distribution: str) -> dict:
+    """``[tool.pymergetic.pins]`` config for *distribution*, or ``{}``."""
+    return pymergetic_pins_table(load_pyproject_data(project_root)).get(distribution, {})
+
+
+def distribution_waits_on_pypi(project_root: Path, distribution: str) -> bool:
+    """True when *distribution* is marked ``wait = true`` for publish CI."""
+    return _pin_flag(pin_entry(project_root, distribution), "wait", default=False)
+
+
 def resolve_bump_distributions(
     pyproject_toml: str,
     project_root: Path,

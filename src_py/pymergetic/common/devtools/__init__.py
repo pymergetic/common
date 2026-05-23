@@ -21,7 +21,9 @@ from pymergetic.common.devtools.pin_pyproject import (
 )
 from pymergetic.common.devtools.pins_config import (
     compatible_pin_specs,
+    distribution_waits_on_pypi,
     load_pyproject_data,
+    pin_entry,
     pymergetic_pins_table,
     resolve_bump_distributions,
     resolve_wait_distributions,
@@ -60,6 +62,7 @@ __all__ = [
     "compatible_pin_versions",
     "compatible_release_pin_from_installed_version",
     "dirty_paths",
+    "distribution_waits_on_pypi",
     "ensure_clean_worktree",
     "fetch_pypi_project_json",
     "fetch_pypi_version",
@@ -71,6 +74,7 @@ __all__ = [
     "load_pyproject_data",
     "newest_pypi_release_for_compatible_pin",
     "next_v_tag",
+    "pin_entry",
     "prepare_worktree_for_tag",
     "project_distribution",
     "project_name_from_pyproject",

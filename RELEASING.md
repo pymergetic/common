@@ -74,6 +74,8 @@ pymergetic-easybind = {}
 
 Keep **one** ``distribution[extra]~=X.Y.Z`` line per pinned upstream (usually **`[build-system] requires`**). Devtools update that line; they do not duplicate the version elsewhere.
 
+**Pin source:** entries with ``wait = true`` (publish blockers) default to **PyPI** when bumping — not the GitHub tag — so you do not pin ``0.0.4`` before pip can install it. The **pin factory** (common) still defaults to **GitHub tags** for ``nanobind`` / ``pymergetic-easybind``.
+
 ```bash
 pymergetic-pin-pyproject --project-root packages/easybind
 pymergetic-pin-pyproject --project-root packages/common
