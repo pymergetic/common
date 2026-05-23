@@ -68,14 +68,43 @@ def fetch_pypi_project_json(distribution: str, *, timeout_s: float = 30.0) -> di
 
 
 def fetch_pypi_version(package: str = "pymergetic-common", *, timeout_s: float = 30.0) -> str:
-    """Return ``info.version`` from ``https://pypi.org/pypi/{package}/json``.
+    """Return the newest stable release on PyPI for *package*.
 
-    Fetches twice: the first request warms PyPI/CDN caches that can briefly return a
-    stale ``info.version`` right after a new release.
+    Uses the ``releases`` map (not only ``info.version``) and fetches twice so CDN/index
+    caches do not return a stale latest right after upload.
     """
+    from packaging.version import Version
+
+    def _latest(data: dict) -> Version:
+        best = _max_stable_pypi_release(data)
+        if best is None:
+            return Version(str(data["info"]["version"]))
+        return best
+
     fetch_pypi_project_json(package, timeout_s=timeout_s)
-    data = fetch_pypi_project_json(package, timeout_s=timeout_s)
-    return str(data["info"]["version"])
+    v1 = _latest(fetch_pypi_project_json(package, timeout_s=timeout_s))
+    v2 = _latest(fetch_pypi_project_json(package, timeout_s=timeout_s))
+    return str(max(v1, v2))
+
+
+def _max_stable_pypi_release(data: dict):
+    """Return the highest stable release ``Version`` with files in PyPI JSON, or ``None``."""
+    from packaging.version import InvalidVersion, Version
+
+    releases = data.get("releases") or {}
+    best: Version | None = None
+    for ver_str, files in releases.items():
+        if not files:
+            continue
+        try:
+            ver = Version(ver_str)
+        except InvalidVersion:
+            continue
+        if ver.is_prerelease or ver.is_devrelease:
+            continue
+        if best is None or ver > best:
+            best = ver
+    return best
 
 
 def github_owner_repo_from_pypi_distribution(distribution: str, *, timeout_s: float = 30.0) -> str:
@@ -205,6 +234,91 @@ def pip_install_dry_run_ok(requirement: str) -> bool:
     return _pip_install_dry_run_once(requirement)
 
 
+def wait_pypi_for_version(
+    distribution: str,
+    version: str,
+    *,
+    timeout_s: float = 1800.0,
+    interval_s: float = 30.0,
+    verbose: bool = False,
+) -> None:
+    """Poll until *version* is on PyPI and pip can resolve ``{distribution}~={version}``."""
+    spec = f"{distribution}~={version}"
+    if verbose:
+        print(
+            f"waiting for {spec} to be installable from PyPI "
+            f"(timeout {timeout_s:.0f}s, interval {interval_s:.0f}s)...",
+            flush=True,
+        )
+    deadline = time.monotonic() + timeout_s
+    attempt = 0
+    while True:
+        attempt += 1
+        json_ok = pypi_release_exists(distribution, version)
+        pip_ok = json_ok and pip_install_dry_run_ok(spec)
+        if pip_ok:
+            return
+        if time.monotonic() >= deadline:
+            state = "JSON only" if json_ok and not pip_ok else "not on PyPI"
+            raise TimeoutError(
+                f"timed out waiting for {spec} ({state}; pip must resolve it) "
+                f"after {timeout_s}s ({attempt} attempts)"
+            )
+        if verbose:
+            remaining = int(max(0, deadline - time.monotonic()))
+            detail = "json ok, pip index lagging" if json_ok else "not on PyPI yet"
+            print(
+                f"attempt {attempt}: {detail} (retry in {interval_s:.0f}s, ~{remaining}s left)...",
+                flush=True,
+            )
+        time.sleep(interval_s)
+
+
+def fetch_pypi_version_after_github_tag(
+    distribution: str,
+    *,
+    timeout_s: float = 1800.0,
+    interval_s: float = 30.0,
+    verbose: bool = False,
+) -> str:
+    """Return latest PyPI release, waiting if GitHub's newest tag is not published yet."""
+    pypi_ver = fetch_pypi_version(distribution)
+    try:
+        owner_repo = github_owner_repo_from_pypi_distribution(distribution)
+        gh_ver = latest_release_version_from_github(owner_repo)
+    except ValueError:
+        return pypi_ver
+
+    if _semver_tuple(pypi_ver) >= _semver_tuple(gh_ver):
+        return pypi_ver
+
+    if verbose:
+        print(
+            f"note: github.com/{owner_repo} has v{gh_ver} but PyPI latest is {pypi_ver}; "
+            "waiting for publish...",
+            file=sys.stderr,
+            flush=True,
+        )
+    try:
+        wait_pypi_for_version(
+            distribution,
+            gh_ver,
+            timeout_s=timeout_s,
+            interval_s=interval_s,
+            verbose=verbose,
+        )
+    except TimeoutError as e:
+        raise ValueError(
+            f"{e}. Confirm the upstream publish workflow finished, or pass --from-pypi to pin "
+            f"the current PyPI latest ({pypi_ver}) without waiting."
+        ) from e
+
+    final = fetch_pypi_version(distribution)
+    if _semver_tuple(final) >= _semver_tuple(gh_ver):
+        return final
+    return gh_ver
+
+
 def wait_pypi_for_compatible_pin(
     pyproject_toml: str,
     distribution: str,
@@ -292,6 +406,18 @@ def latest_release_version_from_github(
 
     Set ``GITHUB_TOKEN`` or ``GH_TOKEN`` (or pass *token*) for private repos or higher rate limits.
     """
+    v1 = _latest_release_version_from_github_once(owner_repo, token=token, timeout_s=timeout_s)
+    v2 = _latest_release_version_from_github_once(owner_repo, token=token, timeout_s=timeout_s)
+    return v1 if _semver_tuple(v1) >= _semver_tuple(v2) else v2
+
+
+def _latest_release_version_from_github_once(
+    owner_repo: str,
+    *,
+    token: str | None = None,
+    timeout_s: float = 30.0,
+) -> str:
+    """Single GitHub tags API scan (see :func:`latest_release_version_from_github`)."""
     s = owner_repo.strip().strip("/")
     parts = s.split("/")
     if len(parts) != 2 or not parts[0] or not parts[1]:
@@ -484,6 +610,14 @@ def main(argv: list[str] | None = None) -> int:
             "on PyPI yet (not recommended for [tool.pymergetic.pins] wait = true targets)"
         ),
     )
+    ap.add_argument(
+        "--no-wait-pypi",
+        action="store_true",
+        help=(
+            "for wait = true pins: pin to the current PyPI latest without waiting for a newer "
+            "GitHub tag to finish publishing"
+        ),
+    )
     ap.add_argument("--dry-run", action="store_true", help="do not write the file")
     ns = ap.parse_args(argv)
 
@@ -557,7 +691,10 @@ def main(argv: list[str] | None = None) -> int:
             ver_source = "github"
         elif wait_pin:
             try:
-                ver = fetch_pypi_version(dist)
+                if ns.no_wait_pypi:
+                    ver = fetch_pypi_version(dist)
+                else:
+                    ver = fetch_pypi_version_after_github_tag(dist, verbose=True)
             except ValueError as e:
                 print(f"error: {e}", file=sys.stderr)
                 return 1
