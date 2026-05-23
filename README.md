@@ -5,31 +5,71 @@
 It centralizes:
 
 - **Python dependency groups** (extras) used across Pymergetic packages
-- **Shared C++ conventions** (foundation headers and patterns)
 - Shared low-level Python utilities (e.g., header/impl wiring)
 
-The build-time C++ SDK lives in `easybind` now (CMake interface target + helper
-macros for unified hybrid extension builds).
+C++ extension builds use **`pymergetic-easybind`** via the `easybind` extra below.
 
-## Samples (runnable)
+## Dependency groups (extras)
 
-Prereq (repo root):
+Install with `pip install pymergetic-common[GROUP]` or `uv pip install -e "packages/common[GROUP]"`.
+
+| Extra | Purpose |
+|-------|---------|
+| `config` | pydantic, pydantic-settings, pyyaml (included in base install) |
+| `console` | fire, rich, textual |
+| `objects` | pyzmq |
+| `pki` | cryptography |
+| `builder` | pyinstaller |
+| `nanobind` | **`nanobind~=…` pin** |
+| `bind` | nanobind + scikit-build stack (no `pymergetic-easybind` — for building easybind itself) |
+| `easybind` | **`bind` + `pymergetic-easybind~=…`** — C++ extension consumer stack |
+| `test` | pytest, pytest-asyncio |
+| `release` | build, twine |
+| `all` | all of the above |
+| `dev` | alias for `all` |
+
+Other packages should **re-export** these groups instead of duplicating pins, e.g.:
+
+```toml
+[project.optional-dependencies]
+dev = ["pymergetic-common[dev]"]
+```
+
+C++ extension packages (cppdantic, synapse, axon): use `pymergetic-common[easybind]`.
+
+## os-sdk workspace install
+
+From the os-sdk repo root:
 
 ```bash
-cd /home/rr/pymergetic/os-sdk
+uv sync
+```
+
+Or:
+
+```bash
+./scripts/dev-install.sh
+```
+
+Standalone package install:
+
+```bash
 uv pip install -e "packages/common[dev]"
 ```
 
-Run `PyObject` (runtime handle) sample:
+## Releasing
+
+Versioning, tagging, and PyPI CI mirror **pymergetic-easybind**. See **[RELEASING.md](RELEASING.md)**.
 
 ```bash
-/home/rr/pymergetic/os-sdk/.venv/bin/python packages/common/examples/pyobject_pydantic.py
+pymergetic-release-tag --dry-run
+pymergetic-release-tag
 ```
 
-Run `PyDataObject` (pure data, idempotent bytes roundtrip) sample:
+Dev CLIs (after `pip install -e .`, os-sdk `uv sync`, or PyPI **`pymergetic-common`**):
 
-```bash
-/home/rr/pymergetic/os-sdk/.venv/bin/python packages/common/examples/pydataobject_roundtrip.py
-```
+- **`pymergetic-release-tag`** — next `v*` tag + push (any package repo)
+- **`pymergetic-pin-pyproject`** — bump `{distribution}~=…` pins (`--distribution` for easybind, cppdantic, …)
+- **`pymergetic-wait-pypi`** — poll until a pinned release is on PyPI
 
-
+Implementation: **`pymergetic.common.devtools`**. See **[RELEASING.md](RELEASING.md)**.
