@@ -56,13 +56,13 @@ set_target_properties(common_sysinfo_internal PROPERTIES
 )
 if(APPLE)
     set_target_properties(common_sysinfo_internal PROPERTIES
-        BUILD_RPATH "@loader_path/..;@loader_path/../../easybind"
-        INSTALL_RPATH "@loader_path/..;@loader_path/../../easybind"
+        BUILD_RPATH "@loader_path/..;@loader_path/../../pymergetic/easybind"
+        INSTALL_RPATH "@loader_path/..;@loader_path/../../pymergetic/easybind"
     )
 else()
     set_target_properties(common_sysinfo_internal PROPERTIES
-        BUILD_RPATH "$ORIGIN/..;$ORIGIN/../../easybind"
-        INSTALL_RPATH "$ORIGIN/..;$ORIGIN/../../easybind"
+        BUILD_RPATH "$ORIGIN/..;$ORIGIN/../../pymergetic/easybind"
+        INSTALL_RPATH "$ORIGIN/..;$ORIGIN/../../pymergetic/easybind"
     )
 endif()
 
@@ -80,13 +80,13 @@ set_target_properties(common_internal PROPERTIES
 )
 if(APPLE)
     set_target_properties(common_internal PROPERTIES
-        BUILD_RPATH "@loader_path/..;@loader_path/../..;@loader_path/../../easybind"
-        INSTALL_RPATH "@loader_path/..;@loader_path/../..;@loader_path/../../easybind"
+        BUILD_RPATH "@loader_path/..;@loader_path/../..;@loader_path/../../pymergetic/easybind"
+        INSTALL_RPATH "@loader_path/..;@loader_path/../..;@loader_path/../../pymergetic/easybind"
     )
 else()
     set_target_properties(common_internal PROPERTIES
-        BUILD_RPATH "$ORIGIN/..;$ORIGIN/../..;$ORIGIN/../../easybind"
-        INSTALL_RPATH "$ORIGIN/..;$ORIGIN/../..;$ORIGIN/../../easybind"
+        BUILD_RPATH "$ORIGIN/..;$ORIGIN/../..;$ORIGIN/../../pymergetic/easybind"
+        INSTALL_RPATH "$ORIGIN/..;$ORIGIN/../..;$ORIGIN/../../pymergetic/easybind"
     )
 endif()
 
