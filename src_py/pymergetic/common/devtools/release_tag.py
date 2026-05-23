@@ -7,10 +7,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pymergetic.common.devtools.pin_pyproject import run_pin_pyproject
 from pymergetic.common.devtools.project_paths import (
     find_git_root,
     project_distribution,
     resolve_project_root,
+    resolve_pyproject,
 )
 from pymergetic.common.devtools.release_helpers import (
     PYPROJECT_AUTO_COMMIT_MSG,
@@ -29,6 +31,8 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
             "Create and push the next release tag from the latest ``v*`` git tag.\n\n"
             "Default: bump **patch**. Use ``--minor`` / ``--major`` for other segments.\n"
             "If there is no ``v*`` tag yet, starts from **v0.0.0**, then bumps.\n\n"
+            "Before tagging, bumps ``~=`` pins from ``[tool.pymergetic.pins]`` (same as "
+            "``pymergetic-pin-pyproject``). Use ``--no-pin`` to skip.\n\n"
             "``[project].name`` is read from ``pyproject.toml`` under ``--project-root``.\n"
             "Git operations run in the git root found at or above that directory.\n\n"
             "If **only** ``pyproject.toml`` is uncommitted, it is committed and pushed to the "
@@ -65,6 +69,42 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
         action="store_true",
         help="do not auto-commit / push a sole pyproject.toml change; require a clean tree",
     )
+    ap.add_argument(
+        "--no-pin",
+        action="store_true",
+        help="skip pymergetic-pin-pyproject before tagging",
+    )
+    pin = ap.add_argument_group("pin options (before tag; ignored with --no-pin)")
+    pin.add_argument(
+        "--distribution",
+        "-d",
+        default=None,
+        metavar="NAME",
+        help="PyPI distribution whose ~= pins to bump (default: [tool.pymergetic.pins] or infer)",
+    )
+    pin.add_argument(
+        "--from-pypi",
+        action="store_true",
+        help="pin from PyPI latest instead of GitHub tags",
+    )
+    pin.add_argument(
+        "--from-github",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="OWNER/REPO",
+        help="pin from GitHub tags (optional OWNER/REPO override)",
+    )
+    pin.add_argument(
+        "--force-github",
+        action="store_true",
+        help="allow pinning to a GitHub tag not yet on PyPI",
+    )
+    pin.add_argument(
+        "--no-wait-pypi",
+        action="store_true",
+        help="for wait = true pins: use current PyPI latest without waiting for a new tag",
+    )
     ns = ap.parse_args(argv)
 
     if repo is not None:
@@ -83,6 +123,27 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+    pyproject = resolve_pyproject(project_root=project_root)
+    try:
+        pyproject_rel = pyproject.relative_to(git_root).as_posix()
+    except ValueError:
+        pyproject_rel = pyproject.name
+
+    if not ns.no_pin:
+        print("--- pin pyproject ---")
+        pin_rc = run_pin_pyproject(
+            project_root,
+            distribution=ns.distribution,
+            from_pypi=ns.from_pypi,
+            from_github=ns.from_github,
+            force_github=ns.force_github,
+            no_wait_pypi=ns.no_wait_pypi,
+            dry_run=ns.dry_run,
+            require_targets=False,
+        )
+        if pin_rc != 0:
+            return pin_rc
 
     latest, new_tag = next_v_tag(git_root, level=ns.level)
     msg = f"{dist_name} {new_tag.removeprefix('v')}"
@@ -104,17 +165,17 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
     paths = dirty_paths(git_root)
     auto = not ns.no_auto_commit
     if paths:
-        if paths == {"pyproject.toml"} and not auto:
+        if paths == {pyproject_rel} and not auto:
             print(
-                "error: pyproject.toml is modified; commit or stash it, "
+                f"error: {pyproject_rel} is modified; commit or stash it, "
                 "or omit --no-auto-commit to commit and push it automatically before tagging.",
                 file=sys.stderr,
             )
             return 1
-        if paths != {"pyproject.toml"}:
+        if paths != {pyproject_rel}:
             print(
                 "error: uncommitted changes (not only pyproject.toml); "
-                "commit or stash everything, or leave only pyproject.toml dirty for auto-commit.\n"
+                f"commit or stash everything, or leave only {pyproject_rel} dirty for auto-commit.\n"
                 + "\n".join(sorted(paths)),
                 file=sys.stderr,
             )
@@ -122,8 +183,8 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
 
     if ns.dry_run:
         print("--- dry-run; commands not executed ---")
-        if paths == {"pyproject.toml"} and auto:
-            print(f"+ git add pyproject.toml && git commit -m {PYPROJECT_AUTO_COMMIT_MSG!r}")
+        if paths == {pyproject_rel} and auto:
+            print(f"+ git add {pyproject_rel} && git commit -m {PYPROJECT_AUTO_COMMIT_MSG!r}")
             if not ns.no_push:
                 print(f"+ git push {ns.remote} {ns.branch}")
         for c in cmds:
@@ -133,6 +194,7 @@ def main(argv: list[str] | None = None, *, repo: Path | None = None) -> int:
     prepare_worktree_for_tag(
         git_root,
         auto_commit_pyproject=auto,
+        pyproject_rel=pyproject_rel,
         remote=ns.remote,
         branch=ns.branch,
         push_after_commit=not ns.no_push,

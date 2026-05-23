@@ -548,6 +548,169 @@ def bump_easybind_compatible_pins_in_file(
     return bump_compatible_pins_in_file(pyproject, "pymergetic-easybind", version, dry_run=dry_run)
 
 
+def run_pin_pyproject(
+    project_root: Path,
+    *,
+    pyproject: Path | None = None,
+    distribution: str | None = None,
+    version: str | None = None,
+    installed: bool = False,
+    from_pypi: bool = False,
+    from_github: str | None = None,
+    force_github: bool = False,
+    no_wait_pypi: bool = False,
+    dry_run: bool = False,
+    require_targets: bool = True,
+) -> int:
+    """Bump ``~=`` pins for *project_root* (same logic as the CLI). Returns a shell exit code."""
+    nsrc = sum(
+        1
+        for x in (
+            version is not None,
+            installed,
+            from_pypi,
+            from_github is not None,
+        )
+        if x
+    )
+    if nsrc > 1:
+        print(
+            "error: use at most one of --version, --installed, --from-pypi, or --from-github",
+            file=sys.stderr,
+        )
+        return 2
+
+    pyproject_path = resolve_pyproject(project_root=project_root, pyproject=pyproject)
+    if not pyproject_path.is_file():
+        print(f"error: {pyproject_path} not found", file=sys.stderr)
+        return 2
+
+    text = pyproject_path.read_text(encoding="utf-8")
+    try:
+        dists = resolve_bump_distributions(text, pyproject_path.parent, distribution)
+    except ValueError as e:
+        if not require_targets:
+            print("pins: none configured (skip)")
+            return 0
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    if not dists:
+        if not require_targets:
+            print("pins: none configured (skip)")
+            return 0
+        print(f"error: no pin targets in {pyproject_path}", file=sys.stderr)
+        return 2
+
+    for dist in dists:
+        wait_pin = distribution_waits_on_pypi(pyproject_path.parent, dist)
+        ver_source: str
+        if installed:
+            raw_installed = installed_distribution_version(dist)
+            try:
+                ver = compatible_release_pin_from_installed_version(raw_installed)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            if raw_installed != ver:
+                print(
+                    f"note: installed {dist}=={raw_installed!r} -> pin ~={ver} (PEP 440 release triple)",
+                    file=sys.stderr,
+                )
+            ver_source = "installed"
+        elif from_pypi:
+            try:
+                ver = fetch_pypi_version(dist)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            ver_source = "pypi"
+        elif version is not None:
+            ver = version.strip()
+            ver_source = "explicit"
+        elif from_github is not None:
+            raw = from_github.strip()
+            try:
+                if not raw:
+                    owner_repo = github_owner_repo_from_pypi_distribution(dist)
+                else:
+                    owner_repo = raw
+                ver = latest_release_version_from_github(owner_repo)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            ver_source = "github"
+        elif wait_pin:
+            try:
+                if no_wait_pypi:
+                    ver = fetch_pypi_version(dist)
+                else:
+                    ver = fetch_pypi_version_after_github_tag(dist, verbose=True)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            ver_source = "pypi"
+        else:
+            try:
+                owner_repo = github_owner_repo_from_pypi_distribution(dist)
+                ver = latest_release_version_from_github(owner_repo)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            ver_source = "github"
+
+        if ver_source == "github" and wait_pin and not force_github:
+            if not pypi_release_exists(dist, ver):
+                print(
+                    f"error: {dist}=={ver} is tagged on GitHub but not on PyPI yet.\n"
+                    "Wait for the upstream publish workflow, then re-run (default for wait = true "
+                    "pins is --from-pypi), or pass --force-github to pin ahead of PyPI.",
+                    file=sys.stderr,
+                )
+                return 1
+            specs_probe = [f"{dist}~={ver}"]
+            if not pip_install_dry_run_ok(specs_probe[0]):
+                print(
+                    f"error: {dist}=={ver} is on PyPI JSON but pip cannot resolve {specs_probe[0]!r} yet.\n"
+                    "Retry in a minute or use --from-pypi after the index catches up.",
+                    file=sys.stderr,
+                )
+                return 1
+
+        if not _VERSION_RE.match(ver):
+            print(f"error: bad version string: {ver!r}", file=sys.stderr)
+            return 2
+
+        try:
+            n = bump_compatible_pins_in_file(pyproject_path, dist, ver, dry_run=dry_run)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+
+        action = "would update" if dry_run else "updated"
+        print(f"{action} {n} {dist}~= pin(s) to ~={ver} in {pyproject_path}")
+
+        if dry_run and ver_source in ("pypi", "installed"):
+            try:
+                or_ = github_owner_repo_from_pypi_distribution(dist)
+                gh_ver = latest_release_version_from_github(or_)
+                if _semver_tuple(gh_ver) > _semver_tuple(ver):
+                    print(
+                        f"hint: github.com/{or_} has v{gh_ver} but {ver_source} gave {ver}. "
+                        f"For wait = true pins the default is PyPI; use --from-github to follow tags.",
+                    )
+            except ValueError:
+                pass
+        elif dry_run and ver_source == "github" and wait_pin:
+            print(
+                f"note: {dist} has wait = true; default bump source is PyPI (--from-pypi). "
+                "GitHub was used because --from-github was set explicitly.",
+                file=sys.stderr,
+            )
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI: ``pymergetic-pin-pyproject`` (see ``--help``)."""
     ap = argparse.ArgumentParser(
@@ -632,145 +795,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="do not write the file")
     ns = ap.parse_args(argv)
 
-    nsrc = sum(
-        1
-        for x in (
-            ns.version is not None,
-            ns.installed,
-            ns.from_pypi,
-            ns.from_github is not None,
-        )
-        if x
+    return run_pin_pyproject(
+        resolve_project_root(ns.project_root),
+        pyproject=ns.pyproject,
+        distribution=ns.distribution,
+        version=ns.version,
+        installed=ns.installed,
+        from_pypi=ns.from_pypi,
+        from_github=ns.from_github,
+        force_github=ns.force_github,
+        no_wait_pypi=ns.no_wait_pypi,
+        dry_run=ns.dry_run,
+        require_targets=True,
     )
-    if nsrc > 1:
-        print(
-            "error: use at most one of --version, --installed, --from-pypi, or --from-github",
-            file=sys.stderr,
-        )
-        return 2
-
-    pyproject = resolve_pyproject(project_root=resolve_project_root(ns.project_root), pyproject=ns.pyproject)
-    if not pyproject.is_file():
-        print(f"error: {pyproject} not found", file=sys.stderr)
-        return 2
-
-    text = pyproject.read_text(encoding="utf-8")
-    try:
-        dists = resolve_bump_distributions(text, pyproject.parent, ns.distribution)
-    except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 2
-
-    exit_code = 0
-    for dist in dists:
-        wait_pin = distribution_waits_on_pypi(pyproject.parent, dist)
-        ver_source: str
-        if ns.installed:
-            raw_installed = installed_distribution_version(dist)
-            try:
-                ver = compatible_release_pin_from_installed_version(raw_installed)
-            except ValueError as e:
-                print(f"error: {e}", file=sys.stderr)
-                return 1
-            if raw_installed != ver:
-                print(
-                    f"note: installed {dist}=={raw_installed!r} -> pin ~={ver} (PEP 440 release triple)",
-                    file=sys.stderr,
-                )
-            ver_source = "installed"
-        elif ns.from_pypi:
-            try:
-                ver = fetch_pypi_version(dist)
-            except ValueError as e:
-                print(f"error: {e}", file=sys.stderr)
-                return 1
-            ver_source = "pypi"
-        elif ns.version is not None:
-            ver = ns.version.strip()
-            ver_source = "explicit"
-        elif ns.from_github is not None:
-            raw = ns.from_github.strip() if ns.from_github is not None else ""
-            try:
-                if not raw:
-                    owner_repo = github_owner_repo_from_pypi_distribution(dist)
-                else:
-                    owner_repo = raw
-                ver = latest_release_version_from_github(owner_repo)
-            except ValueError as e:
-                print(f"error: {e}", file=sys.stderr)
-                return 1
-            ver_source = "github"
-        elif wait_pin:
-            try:
-                if ns.no_wait_pypi:
-                    ver = fetch_pypi_version(dist)
-                else:
-                    ver = fetch_pypi_version_after_github_tag(dist, verbose=True)
-            except ValueError as e:
-                print(f"error: {e}", file=sys.stderr)
-                return 1
-            ver_source = "pypi"
-        else:
-            try:
-                owner_repo = github_owner_repo_from_pypi_distribution(dist)
-                ver = latest_release_version_from_github(owner_repo)
-            except ValueError as e:
-                print(f"error: {e}", file=sys.stderr)
-                return 1
-            ver_source = "github"
-
-        if ver_source == "github" and wait_pin and not ns.force_github:
-            if not pypi_release_exists(dist, ver):
-                print(
-                    f"error: {dist}=={ver} is tagged on GitHub but not on PyPI yet.\n"
-                    "Wait for the upstream publish workflow, then re-run (default for wait = true "
-                    "pins is --from-pypi), or pass --force-github to pin ahead of PyPI.",
-                    file=sys.stderr,
-                )
-                return 1
-            specs_probe = [f"{dist}~={ver}"]
-            if not pip_install_dry_run_ok(specs_probe[0]):
-                print(
-                    f"error: {dist}=={ver} is on PyPI JSON but pip cannot resolve {specs_probe[0]!r} yet.\n"
-                    "Retry in a minute or use --from-pypi after the index catches up.",
-                    file=sys.stderr,
-                )
-                return 1
-
-        if not _VERSION_RE.match(ver):
-            print(f"error: bad version string: {ver!r}", file=sys.stderr)
-            return 2
-
-        try:
-            n = bump_compatible_pins_in_file(pyproject, dist, ver, dry_run=ns.dry_run)
-        except ValueError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 1
-
-        action = "would update" if ns.dry_run else "updated"
-        print(f"{action} {n} {dist}~= pin(s) to ~={ver} in {pyproject}")
-
-        if ns.dry_run and ver_source in ("pypi", "installed"):
-            try:
-                or_ = github_owner_repo_from_pypi_distribution(dist)
-                gh_ver = latest_release_version_from_github(or_)
-                if _semver_tuple(gh_ver) > _semver_tuple(ver):
-                    print(
-                        f"hint: github.com/{or_} has v{gh_ver} but {ver_source} gave {ver}. "
-                        f"For wait = true pins the default is PyPI; use --from-github to follow tags.",
-                    )
-            except ValueError:
-                pass
-        elif ns.dry_run and ver_source == "github" and wait_pin:
-            print(
-                f"note: {dist} has wait = true; default bump source is PyPI (--from-pypi). "
-                "GitHub was used because --from-github was set explicitly.",
-                file=sys.stderr,
-            )
-
-        text = pyproject.read_text(encoding="utf-8")
-
-    return exit_code
 
 
 if __name__ == "__main__":

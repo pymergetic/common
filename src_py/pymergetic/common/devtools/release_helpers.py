@@ -132,6 +132,7 @@ def prepare_worktree_for_tag(
     repo: Path,
     *,
     auto_commit_pyproject: bool = True,
+    pyproject_rel: str = _PYPROJECT_TOML,
     commit_message: str = PYPROJECT_AUTO_COMMIT_MSG,
     remote: str = "origin",
     branch: str = "main",
@@ -145,8 +146,8 @@ def prepare_worktree_for_tag(
     paths = dirty_paths(repo)
     if not paths:
         return
-    if paths == {_PYPROJECT_TOML} and auto_commit_pyproject:
-        subprocess.run(["git", "add", _PYPROJECT_TOML], cwd=repo, check=True)
+    if paths == {pyproject_rel} and auto_commit_pyproject:
+        subprocess.run(["git", "add", pyproject_rel], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-m", commit_message], cwd=repo, check=True)
         if push_after_commit:
             subprocess.run(["git", "push", remote, branch], cwd=repo, check=True)

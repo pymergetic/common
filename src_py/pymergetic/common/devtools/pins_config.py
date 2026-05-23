@@ -73,6 +73,17 @@ def distribution_waits_on_pypi(project_root: Path, distribution: str) -> bool:
     return _pin_flag(pin_entry(project_root, distribution), "wait", default=False)
 
 
+def optional_bump_distributions(project_root: Path) -> list[str]:
+    """Distributions to bump, or ``[]`` when this project has no pin targets."""
+    pp = pyproject_path(project_root)
+    if not pp.is_file():
+        return []
+    try:
+        return resolve_bump_distributions(pp.read_text(encoding="utf-8"), project_root, None)
+    except ValueError:
+        return []
+
+
 def resolve_bump_distributions(
     pyproject_toml: str,
     project_root: Path,
