@@ -241,12 +241,14 @@ def wait_pypi_for_version(
     timeout_s: float = 1800.0,
     interval_s: float = 30.0,
     verbose: bool = False,
+    require_pip: bool = False,
 ) -> None:
-    """Poll until *version* is on PyPI and pip can resolve ``{distribution}~={version}``."""
+    """Poll until *version* is on PyPI (and optionally until pip can resolve it)."""
     spec = f"{distribution}~={version}"
     if verbose:
+        goal = "installable from PyPI" if require_pip else "published on PyPI"
         print(
-            f"waiting for {spec} to be installable from PyPI "
+            f"waiting for {distribution} {version} to be {goal} "
             f"(timeout {timeout_s:.0f}s, interval {interval_s:.0f}s)...",
             flush=True,
         )
@@ -256,17 +258,26 @@ def wait_pypi_for_version(
         attempt += 1
         json_ok = pypi_release_exists(distribution, version)
         pip_ok = json_ok and pip_install_dry_run_ok(spec)
-        if pip_ok:
+        if json_ok and (pip_ok or not require_pip):
+            if verbose and json_ok and require_pip and not pip_ok:
+                print("note: PyPI JSON is ready but pip index is still lagging", flush=True)
             return
         if time.monotonic() >= deadline:
-            state = "JSON only" if json_ok and not pip_ok else "not on PyPI"
+            if json_ok and require_pip and not pip_ok:
+                state = "JSON only"
+            else:
+                state = "not on PyPI"
             raise TimeoutError(
-                f"timed out waiting for {spec} ({state}; pip must resolve it) "
-                f"after {timeout_s}s ({attempt} attempts)"
+                f"timed out waiting for {spec} ({state}"
+                + ("; pip must resolve it" if require_pip else "")
+                + f") after {timeout_s}s ({attempt} attempts)"
             )
         if verbose:
             remaining = int(max(0, deadline - time.monotonic()))
-            detail = "json ok, pip index lagging" if json_ok else "not on PyPI yet"
+            if json_ok and require_pip:
+                detail = "json ok, pip index lagging"
+            else:
+                detail = "not on PyPI yet"
             print(
                 f"attempt {attempt}: {detail} (retry in {interval_s:.0f}s, ~{remaining}s left)...",
                 flush=True,
@@ -344,7 +355,7 @@ def wait_pypi_for_compatible_pin(
         attempt += 1
         json_ok = pypi_release_exists(distribution, pin_version)
         pip_ok = json_ok and all(pip_install_dry_run_ok(spec) for spec in specs)
-        if pip_ok:
+        if json_ok and pip_ok:
             return pin_version, attempt
         if time.monotonic() >= deadline:
             state = "JSON only" if json_ok and not pip_ok else "not on PyPI"
