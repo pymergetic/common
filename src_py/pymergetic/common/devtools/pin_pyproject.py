@@ -68,7 +68,12 @@ def fetch_pypi_project_json(distribution: str, *, timeout_s: float = 30.0) -> di
 
 
 def fetch_pypi_version(package: str = "pymergetic-common", *, timeout_s: float = 30.0) -> str:
-    """Return ``info.version`` from ``https://pypi.org/pypi/{package}/json``."""
+    """Return ``info.version`` from ``https://pypi.org/pypi/{package}/json``.
+
+    Fetches twice: the first request warms PyPI/CDN caches that can briefly return a
+    stale ``info.version`` right after a new release.
+    """
+    fetch_pypi_project_json(package, timeout_s=timeout_s)
     data = fetch_pypi_project_json(package, timeout_s=timeout_s)
     return str(data["info"]["version"])
 
@@ -174,8 +179,7 @@ def single_compatible_pin_version(
     return vers[0]
 
 
-def pip_install_dry_run_ok(requirement: str) -> bool:
-    """Return whether ``pip install --dry-run`` can resolve *requirement* right now."""
+def _pip_install_dry_run_once(requirement: str) -> bool:
     proc = subprocess.run(
         [
             sys.executable,
@@ -190,6 +194,15 @@ def pip_install_dry_run_ok(requirement: str) -> bool:
         text=True,
     )
     return proc.returncode == 0
+
+
+def pip_install_dry_run_ok(requirement: str) -> bool:
+    """Return whether ``pip install --dry-run`` can resolve *requirement* right now.
+
+    Runs twice: the first dry-run warms pip's index cache (common right after PyPI upload).
+    """
+    _pip_install_dry_run_once(requirement)
+    return _pip_install_dry_run_once(requirement)
 
 
 def wait_pypi_for_compatible_pin(
