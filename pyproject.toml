@@ -41,6 +41,7 @@ config = [
 api = [
   "fastapi>=0.100",
   "httpx",
+  "uvicorn[standard]>=0.30",
 ]
 objects = [
   "pyzmq>=25.0.0",
