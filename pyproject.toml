@@ -67,7 +67,7 @@ bind = [
 ]
 easybind = [
   "pymergetic-common[bind]",
-  "pymergetic-easybind~=0.3.18",
+  "pymergetic-easybind~=0.3.19",
 ]
 
 test = [
